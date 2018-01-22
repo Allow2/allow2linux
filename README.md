@@ -1,4 +1,4 @@
-allow2linux
+Allow2linux
 ===========
 
 Placeholder for someone to port the allow2mac system over to linux.
