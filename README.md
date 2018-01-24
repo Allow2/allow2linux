@@ -5,6 +5,8 @@ Placeholder for someone to port the allow2mac system over to linux.
 
 It is intended to be a time-control system for linux-based OS systems.
 
+refer to https://github.com/Allow2/Allow2.github.io/wiki for more details.
+
 # How it should work
 
 The idea is to hook up a privileged helper and a user account level service that operates on the login and in the background with regular checks to the elevated helper (or whatever architecture makes sense for linux).
