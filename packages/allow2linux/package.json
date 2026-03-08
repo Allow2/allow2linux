@@ -1,0 +1,35 @@
+{
+  "name": "allow2linux",
+  "version": "1.0.0-alpha.1",
+  "description": "Allow2 parental controls for Linux — Steam Deck, desktops, and more",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "allow2linux": "src/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test tests/"
+  },
+  "keywords": [
+    "parental-controls",
+    "allow2",
+    "linux",
+    "steam-deck",
+    "screen-time"
+  ],
+  "homepage": "https://github.com/Allow2/allow2linux",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Allow2/allow2linux.git"
+  },
+  "author": "Allow2 Pty Ltd",
+  "license": "SEE LICENSE IN LICENSE FILE",
+  "dependencies": {
+    "allow2": "file:../../../sdk/node",
+    "ws": "^8.18.0"
+  }
+}

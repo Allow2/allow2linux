@@ -1,0 +1,14 @@
+[Unit]
+Description=Allow2 Parental Controls for Linux
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node %h/.allow2/allow2linux/src/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

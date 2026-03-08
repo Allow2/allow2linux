@@ -1,0 +1,31 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# C build artifacts
+packages/allow2-lock-overlay/*.o
+packages/allow2-lock-overlay/allow2-lock-overlay
+packages/allow2-lock-overlay/build/
+
+# Flatpak build
+.flatpak-builder/
+flatpak/build/
+flatpak/repo/
+flatpak/*.flatpak
+
+# Snap build
+snap/*.snap
+parts/
+prime/
+stage/

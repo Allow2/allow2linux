@@ -1,0 +1,39 @@
+{
+  "_comment": "Map process names to Allow2 activity IDs. 1=Internet, 3=Gaming, 6=Social, 8=Screen Time",
+  "gaming": {
+    "steam": 3,
+    "steamwebhelper": 3,
+    "lutris": 3,
+    "retroarch": 3,
+    "dosbox": 3,
+    "wine": 3,
+    "wine64": 3,
+    "proton": 3,
+    "mangohud": 3,
+    "gamemode": 3
+  },
+  "internet": {
+    "firefox": 1,
+    "firefox-esr": 1,
+    "chromium": 1,
+    "chromium-browser": 1,
+    "google-chrome": 1,
+    "brave-browser": 1,
+    "brave": 1,
+    "epiphany": 1,
+    "vivaldi": 1,
+    "opera": 1,
+    "midori": 1
+  },
+  "social": {
+    "discord": 6,
+    "Discord": 6,
+    "telegram-desktop": 6,
+    "signal-desktop": 6,
+    "slack": 6,
+    "element-desktop": 6,
+    "teams": 6,
+    "zoom": 6,
+    "whatsapp-desktop": 6
+  }
+}

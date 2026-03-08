@@ -1,0 +1,141 @@
+app-id: com.allow2.allow2linux
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: allow2linux
+
+finish-args:
+  # Display access (Wayland + X11 + framebuffer for SDL2 overlay)
+  - --socket=wayland
+  - --socket=x11
+  - --socket=fallback-x11
+  - --device=dri
+
+  # Network for Allow2 API communication
+  - --share=network
+
+  # Read /proc for process classification
+  - --filesystem=/proc:ro
+
+  # Home directory for credentials (~/.allow2/) and config
+  - --filesystem=home
+
+  # Session bus for desktop notifications (notify-send)
+  - --socket=session-bus
+  - --talk-name=org.freedesktop.Notifications
+
+  # System bus for loginctl (session lock/terminate)
+  - --system-talk-name=org.freedesktop.login1
+
+  # Access to libsecret (credential storage)
+  - --talk-name=org.freedesktop.secrets
+
+  # Unix sockets for overlay IPC
+  - --filesystem=/tmp
+
+modules:
+  # ── Node.js 20 LTS ──────────────────────────────────────────
+  - name: nodejs
+    buildsystem: simple
+    build-commands:
+      - install -D -m 755 bin/node /app/bin/node
+      - cp -r lib/node_modules /app/lib/node_modules
+      - ln -s ../lib/node_modules/npm/bin/npm-cli.js /app/bin/npm
+    sources:
+      - type: archive
+        only-arches:
+          - x86_64
+        url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.gz
+        sha256: 9b9dd2f9b3e09cbfca222e0f3fee0e987e5765d3d7bf2d87afa0025d0e8a64d3
+      - type: archive
+        only-arches:
+          - aarch64
+        url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-arm64.tar.gz
+        sha256: b42e871f3d28289cd84a2e6e68e076d4fb3ce6ddc30eb9a58dd3d89c35c0fc39
+
+  # ── allow2 SDK (Node.js) ────────────────────────────────────
+  - name: allow2-sdk
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/allow2-sdk
+      - cp -r src package.json /app/lib/allow2-sdk/
+      - cd /app/lib/allow2-sdk && /app/bin/npm install --omit=dev --no-optional
+    sources:
+      - type: dir
+        path: ../../sdk/node
+
+  # ── allow2-lock-overlay (C + SDL2) ──────────────────────────
+  - name: allow2-lock-overlay
+    buildsystem: simple
+    build-commands:
+      - make
+      - install -D -m 755 allow2-lock-overlay /app/bin/allow2-lock-overlay
+    sources:
+      - type: dir
+        path: ../packages/allow2-lock-overlay
+
+  # ── allow2linux daemon (Node.js) ────────────────────────────
+  - name: allow2linux
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/allow2linux
+      - cp -r src config systemd package.json /app/lib/allow2linux/
+      # Rewrite the SDK dependency to point to the flatpak install location
+      - cd /app/lib/allow2linux && sed -i 's|"file:../../../sdk/node"|"file:../allow2-sdk"|' package.json
+      - cd /app/lib/allow2linux && /app/bin/npm install --omit=dev --no-optional
+      # Install the launcher script
+      - install -D -m 755 allow2linux.sh /app/bin/allow2linux
+      # Desktop entry and icon
+      - install -D -m 644 com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop
+      - install -D -m 644 com.allow2.allow2linux.metainfo.xml /app/share/metainfo/com.allow2.allow2linux.metainfo.xml
+    sources:
+      - type: dir
+        path: ../packages/allow2linux
+      # Launcher script
+      - type: inline
+        dest-filename: allow2linux.sh
+        contents: |
+          #!/bin/sh
+          exec /app/bin/node /app/lib/allow2linux/src/index.js "$@"
+      # Desktop entry
+      - type: inline
+        dest-filename: com.allow2.allow2linux.desktop
+        contents: |
+          [Desktop Entry]
+          Name=Allow2 Parental Controls
+          Comment=Parental controls for Linux
+          Exec=allow2linux
+          Icon=com.allow2.allow2linux
+          Type=Application
+          Categories=System;Utility;
+          NoDisplay=true
+          X-Flatpak-RenamedFrom=allow2linux
+      # AppStream metainfo
+      - type: inline
+        dest-filename: com.allow2.allow2linux.metainfo.xml
+        contents: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <component type="desktop-application">
+            <id>com.allow2.allow2linux</id>
+            <name>Allow2 Parental Controls</name>
+            <summary>Smart parental controls for Linux desktops and Steam Deck</summary>
+            <metadata_license>CC0-1.0</metadata_license>
+            <project_license>LicenseRef-proprietary</project_license>
+            <description>
+              <p>
+                Allow2 brings smart, activity-aware parental controls to Linux.
+                Monitor and manage screen time, gaming, internet, and social media
+                with per-activity quotas, progressive warnings, and request-more-time.
+              </p>
+              <p>
+                Works on Steam Deck (Gaming Mode and Desktop Mode), Ubuntu, Fedora,
+                Arch, and any Linux distribution.
+              </p>
+            </description>
+            <url type="homepage">https://www.allow2.com</url>
+            <releases>
+              <release version="1.0.0-alpha.1" date="2026-03-08">
+                <description><p>Initial alpha release.</p></description>
+              </release>
+            </releases>
+          </component>
