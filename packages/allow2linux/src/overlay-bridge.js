@@ -285,17 +285,34 @@ export class OverlayBridge extends EventEmitter {
         var self = this;
         var steamUrl = 'steam://openurl/' + url;
 
-        // Try Steam browser first (works in Game Mode)
-        console.log('Opening URL via steam://openurl');
-        execFile('xdg-open', [steamUrl], { timeout: 5000 }, function () {});
-
-        // If no WebSocket connects within 3s, also try plain browser (Desktop Mode)
-        setTimeout(function () {
-            if (!self._ws) {
-                console.log('No overlay connection, trying desktop browser');
-                execFile('xdg-open', [url], { timeout: 5000 }, function () {});
+        // Primary: Steam CLI with steam://openurl/ (Game Mode)
+        console.log('[overlay] trying steam: ' + steamUrl);
+        execFile('steam', [steamUrl], { timeout: 5000 }, function (err) {
+            if (err) {
+                console.log('[overlay] steam failed: ' + (err.message || '').split('\n')[0]);
             }
+        });
+
+        // Fallback (3s): try known browsers directly (Desktop Mode)
+        setTimeout(function () {
+            if (self._ws) return;
+            var browsers = ['firefox', 'chromium', 'google-chrome', 'xdg-open'];
+            self._tryBrowsers(browsers, 0, url);
         }, 3000);
+    }
+
+    _tryBrowsers(browsers, index, url) {
+        var self = this;
+        if (index >= browsers.length || self._ws) return;
+
+        var browser = browsers[index];
+        console.log('[overlay] trying ' + browser + ': ' + url);
+        execFile(browser, [url], { timeout: 5000 }, function (err) {
+            if (err && !self._ws) {
+                console.log('[overlay] ' + browser + ' failed');
+                self._tryBrowsers(browsers, index + 1, url);
+            }
+        });
     }
 
     _handleMessage(msg) {
