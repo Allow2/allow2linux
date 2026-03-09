@@ -756,6 +756,7 @@ export class OverlayBridge extends EventEmitter {
         }
 
         var candidates = [
+            '/app/bin/allow2-lock-overlay',  // Flatpak
             join(__dirname, '..', '..', 'allow2-lock-overlay', 'allow2-lock-overlay'),
             join(__dirname, '..', '..', '..', 'packages', 'allow2-lock-overlay', 'allow2-lock-overlay'),
             '/usr/lib/allow2/allow2-lock-overlay',
