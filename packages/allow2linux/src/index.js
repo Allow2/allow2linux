@@ -36,8 +36,8 @@ const daemon = new DeviceDaemon({
     childResolver: resolveLinuxUser,
     gracePeriod: 5 * 60,
     pairingPort: 3000,
-    // VID/token/apiUrl come from env vars (ALLOW2_VID, ALLOW2_TOKEN, ALLOW2_API_URL)
-    // or will use baked-in defaults once production values are set in api.js
+    vid: 21599,
+    token: 'x9AUeUPpiweHTNCR',
 });
 
 // --- Overlay events (from SDL2 binary) ---
