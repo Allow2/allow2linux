@@ -46,8 +46,11 @@
   <url type="bugtracker">https://github.com/Allow2/allow2linux/issues</url>
   <url type="help">https://www.allow2.com/support</url>
   <url type="vcs-browser">https://github.com/Allow2/allow2linux</url>
+  <url type="contribute">https://github.com/Allow2/allow2linux</url>
 
   <launchable type="desktop-id">com.allow2.allow2linux.desktop</launchable>
+
+  <update_contact>support_AT_allow2.com</update_contact>
 
   <branding>
     <color type="primary" scheme_preference="light">#4A90D9</color>

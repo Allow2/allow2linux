@@ -6,6 +6,6 @@ Exec=allow2linux
 Icon=com.allow2.allow2linux
 Type=Application
 Categories=System;Utility;
-Keywords=parental;controls;screen;time;kids;family;gaming;allow2;
+Keywords=parental;freedom;screen;time;kids;family;gaming;allow2;steam-deck;
 NoDisplay=false
 X-Flatpak=com.allow2.allow2linux
