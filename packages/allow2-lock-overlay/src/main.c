@@ -230,6 +230,13 @@ static void hide_window(SDL_Window *window) {
 }
 
 static void resolve_assets_path(char *out, int maxlen) {
+    /* Flatpak: fonts are at /app/share/allow2/assets (symlinked from /app/bin/assets) */
+    if (access("/app/share/allow2/assets/Inter-Regular.ttf", R_OK) == 0) {
+        snprintf(out, maxlen, "/app/share/allow2/assets");
+        return;
+    }
+
+    /* Non-Flatpak: resolve relative to binary location */
     char exe_dir[512];
     int len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
     if (len > 0) {

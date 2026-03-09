@@ -87,8 +87,8 @@ modules:
     buildsystem: simple
     build-commands:
       - mkdir -p /app/share/allow2/assets
-      - unzip -o -j Inter.zip "Inter-4.1/InterDesktop/Inter-Regular.ttf" -d /app/share/allow2/assets || true
-      - unzip -o -j Inter.zip "Inter-4.1/InterDesktop/Inter-Bold.ttf" -d /app/share/allow2/assets || true
+      - unzip -o -j Inter.zip "extras/ttf/Inter-Regular.ttf" -d /app/share/allow2/assets
+      - unzip -o -j Inter.zip "extras/ttf/Inter-Bold.ttf" -d /app/share/allow2/assets
     sources:
       - type: file
         url: https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip

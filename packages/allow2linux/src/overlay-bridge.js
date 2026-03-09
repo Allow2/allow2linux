@@ -713,6 +713,15 @@ export class OverlayBridge extends EventEmitter {
         var self = this;
         if (this._sdlReconnectTimer) return;
 
+        // In app mode, don't auto-restart — the user intentionally closed the window.
+        // Overlay mode restarts because a crashed overlay leaves the screen locked.
+        if (this._sdlAppMode) {
+            console.log('[overlay] app window closed by user, not restarting');
+            this._currentScreen = null;
+            this._screenData = {};
+            return;
+        }
+
         this._sdlReconnectTimer = setTimeout(function () {
             self._sdlReconnectTimer = null;
             if (!self._sdlProcess && self._currentScreen) {
