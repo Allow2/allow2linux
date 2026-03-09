@@ -84,8 +84,8 @@ modules:
         for f in npm-cache/*.tgz; do
           /app/bin/npm cache add "$f" 2>/dev/null || true
         done
-      # Install fully offline — bogus registry prevents any network fallback
-      - cd /app/lib/allow2-sdk && /app/bin/npm ci --omit=dev --ignore-scripts --prefer-offline --registry=http://localhost:1
+      # Install fully offline — no network access in Flathub sandbox
+      - cd /app/lib/allow2-sdk && /app/bin/npm install --omit=dev --ignore-scripts --offline
     sources:
       - type: git
         url: https://github.com/Allow2/Allow2node.git
