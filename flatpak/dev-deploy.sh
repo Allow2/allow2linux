@@ -233,7 +233,7 @@ install_service() {
 
         cat > "${SERVICE_DIR}/allow2linux.service" <<UNIT
 [Unit]
-Description=Allow2 Parental Controls for Linux
+Description=Allow2 Parental Freedom for Linux
 After=network-online.target
 Wants=network-online.target
 

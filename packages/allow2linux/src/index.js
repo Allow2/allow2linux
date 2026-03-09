@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * allow2linux — Allow2 parental controls for Linux devices.
+ * allow2linux — Allow2 Parental Freedom for Linux devices.
  *
  * Lifecycle:
  *   1. Unpaired  → dormant, no overlays. Wait for user to open Allow2 app.
@@ -18,7 +18,9 @@ import { DesktopNotifier } from './desktop-notify.js';
 import { SessionManager } from './session.js';
 import { OverlayBridge } from './overlay-bridge.js';
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const classifier = new ProcessClassifier();
 const steam = new SteamMonitor();
@@ -142,7 +144,7 @@ daemon.on('pairing-required', function (info) {
 daemon.on('paired', function (data) {
     console.log('Device paired! userId=' + data.userId + ', children=' + (data.children ? data.children.length : 0));
     overlay.dismiss();
-    notifier.notify('Device paired with Allow2. Parental controls are now active.', 'info');
+    notifier.notify('Device paired with Allow2. Parental Freedom is now active.', 'info');
 });
 
 daemon.on('status-requested', function (data) {
@@ -318,29 +320,63 @@ daemon.on('unpaired', function () {
     // Daemon already stopped enforcement internally
 });
 
+// --- Logging ---
+
+var _logDir = join(homedir(), '.allow2');
+try { mkdirSync(_logDir, { recursive: true }); } catch (_e) { /* */ }
+var _logFile = join(_logDir, 'allow2linux.log');
+
+function _log(msg) {
+    var line = new Date().toISOString() + ' ' + msg;
+    console.log(line);
+    try { appendFileSync(_logFile, line + '\n'); } catch (_e) { /* */ }
+}
+
+function _logError(msg) {
+    var line = new Date().toISOString() + ' ERROR ' + msg;
+    console.error(line);
+    try { appendFileSync(_logFile, line + '\n'); } catch (_e) { /* */ }
+}
+
+// Catch unhandled errors so the process doesn't die silently
+process.on('uncaughtException', function (err) {
+    _logError('Uncaught exception: ' + (err.stack || err.message || err));
+});
+
+process.on('unhandledRejection', function (reason) {
+    _logError('Unhandled rejection: ' + (reason && reason.stack ? reason.stack : reason));
+});
+
 // --- Start ---
 
-console.log('allow2linux starting...');
+_log('allow2linux starting...');
 
-// Start overlay web server, then daemon
+// Start overlay, then daemon. Overlay failure is non-fatal — daemon can still
+// pair via the SDK's HTTP pairing wizard (port 3000) without the SDL2 overlay.
 overlay.start().then(function () {
-    console.log('Overlay web server started');
-    return daemon.start();
+    _log('Overlay started');
 }).catch(function (err) {
-    console.error('Failed to start:', err.message || err);
+    _logError('Overlay failed to start: ' + (err.message || err) + ' — continuing without overlay');
+});
+
+// Start daemon independently — don't chain on overlay
+daemon.start().then(function () {
+    _log('Daemon started');
+}).catch(function (err) {
+    _logError('Daemon failed to start: ' + (err.message || err));
     process.exit(1);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', function () {
-    console.log('Shutting down...');
+    _log('Shutting down (SIGTERM)...');
     daemon.stop();
     overlay.stop();
     process.exit(0);
 });
 
 process.on('SIGINT', function () {
-    console.log('Shutting down...');
+    _log('Shutting down (SIGINT)...');
     daemon.stop();
     overlay.stop();
     process.exit(0);

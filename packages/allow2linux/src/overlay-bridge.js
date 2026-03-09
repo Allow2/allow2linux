@@ -47,6 +47,7 @@ export class OverlayBridge extends EventEmitter {
         this._sdlSocket = null;
         this._sdlBuffer = '';
         this._sdlReconnectTimer = null;
+        this._sdlAppMode = false; // true = windowed app, false = fullscreen overlay
     }
 
     // ── Lifecycle ──────────────────────────────────────────────
@@ -158,7 +159,7 @@ export class OverlayBridge extends EventEmitter {
     }
 
     showStatusScreen(data) {
-        var message = {
+        this._showScreen('status', {
             screen: 'status',
             family: data.family || '',
             childName: data.childName || '',
@@ -166,15 +167,7 @@ export class OverlayBridge extends EventEmitter {
             isParent: data.isParent ? 1 : 0,
             activities: data.remaining || [],
             canSubmitFeedback: data.canSubmitFeedback ? 1 : 0,
-        };
-        this._currentScreen = 'status';
-        this._screenData = message;
-
-        if (this._mode === 'steam') {
-            this._openSteamUrl('http://127.0.0.1:' + OVERLAY_PORT + '/status');
-        } else {
-            this._sendSdl(message);
-        }
+        });
     }
 
     showFeedbackScreen() {
@@ -205,11 +198,11 @@ export class OverlayBridge extends EventEmitter {
             this._reopenTimer = null;
         }
         this._send({ screen: 'dismiss' });
-        // In SDL2 mode, kill the binary after dismiss — it will be
+        // In SDL2 overlay mode, kill the binary after dismiss — it will be
         // respawned on-demand when the next screen is needed.
-        // This ensures no process lingers with a hidden fullscreen window.
-        if (this._mode === 'sdl2' && this._sdlProcess) {
-            console.log('[overlay] killing SDL2 binary after dismiss');
+        // In app mode, the binary stays alive (shows idle background).
+        if (this._mode === 'sdl2' && this._sdlProcess && !this._sdlAppMode) {
+            console.log('[overlay] killing SDL2 overlay binary after dismiss');
             try { this._sdlProcess.kill('SIGTERM'); } catch (_e) { /* */ }
             this._sdlProcess = null;
         }
@@ -226,12 +219,28 @@ export class OverlayBridge extends EventEmitter {
             var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + screenName;
             this._openSteamUrl(url);
         } else {
-            // SDL2: spawn binary on-demand if not running (deferred start)
+            // Desktop Mode: non-blocking screens use windowed app mode,
+            // blocking screens (lock, warning) use fullscreen overlay mode.
+            var wantAppMode = (screenName === 'pairing' || screenName === 'selector'
+                || screenName === 'status' || screenName === 'feedback'
+                || screenName === 'pin');
+            var needsRespawn = this._sdlProcess && (wantAppMode !== this._sdlAppMode);
+
+            if (needsRespawn) {
+                console.log('[overlay] switching SDL2 mode (' + (this._sdlAppMode ? 'app' : 'overlay')
+                    + ' → ' + (wantAppMode ? 'app' : 'overlay') + ')');
+                try { this._sdlProcess.kill('SIGTERM'); } catch (_e) { /* */ }
+                this._sdlProcess = null;
+                this._sdlSocket = null;
+            }
+
             if (!this._sdlProcess) {
                 var binaryPath = this._findOverlayBinary();
                 if (binaryPath) {
-                    console.log('[overlay] spawning SDL2 on-demand for screen: ' + screenName);
-                    this._spawnSdl2(binaryPath);
+                    console.log('[overlay] spawning SDL2 on-demand for screen: ' + screenName
+                        + ' (mode: ' + (wantAppMode ? 'app' : 'overlay') + ')');
+                    this._sdlAppMode = wantAppMode;
+                    this._spawnSdl2(binaryPath, wantAppMode);
                     // Binary will connect and receive current screen via _sdlServer 'connection' handler
                 } else {
                     console.error('[overlay] SDL2 binary not found, cannot show screen');
@@ -637,7 +646,7 @@ export class OverlayBridge extends EventEmitter {
         });
     }
 
-    _spawnSdl2(binaryPath) {
+    _spawnSdl2(binaryPath, appMode) {
         var self = this;
 
         // Build environment for SDL2 binary.
@@ -655,9 +664,14 @@ export class OverlayBridge extends EventEmitter {
                 + ' XAUTHORITY=' + (sdlEnv.XAUTHORITY || 'unset'));
         }
 
-        console.log('[overlay] spawning SDL2 binary: ' + binaryPath);
+        var args = ['--socket', SOCKET_PATH];
+        if (appMode) {
+            args.push('--mode', 'app');
+        }
+
+        console.log('[overlay] spawning SDL2 binary: ' + binaryPath + ' ' + args.join(' '));
         try {
-            this._sdlProcess = spawn(binaryPath, ['--socket', SOCKET_PATH], {
+            this._sdlProcess = spawn(binaryPath, args, {
                 stdio: ['ignore', 'pipe', 'pipe'],
                 env: sdlEnv,
             });
@@ -701,7 +715,7 @@ export class OverlayBridge extends EventEmitter {
             if (!self._sdlProcess && self._currentScreen) {
                 var binaryPath = self._findOverlayBinary();
                 if (binaryPath) {
-                    self._spawnSdl2(binaryPath);
+                    self._spawnSdl2(binaryPath, self._sdlAppMode);
                 }
             }
         }, 2000);
@@ -1038,7 +1052,7 @@ var OVERLAY_JS = ''
     + '    qrHtml="<div style=\\"margin:1rem auto;width:200px;height:200px;background:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden\\">"+state.qrSvg+"</div>";'
     + '  }'
     + '  app.innerHTML='
-    + '    "<h1>Set Up Parental Controls</h1>"'
+    + '    "<h1>Set Up Allow2</h1>"'
     + '    +qrHtml'
     + '    +"<p class=subtitle>"+(state.message||"Open the Allow2 app and enter this PIN")+"</p>"'
     + '    +"<div class=pin-digits>"+digits+"</div>"'

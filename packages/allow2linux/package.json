@@ -1,7 +1,7 @@
 {
   "name": "allow2linux",
   "version": "1.0.0-alpha.1",
-  "description": "Allow2 parental controls for Linux — Steam Deck, desktops, and more",
+  "description": "Allow2 Parental Freedom for Linux — Steam Deck, desktops, and more",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -27,7 +27,7 @@
     "url": "git+https://github.com/Allow2/allow2linux.git"
   },
   "author": "Allow2 Pty Ltd",
-  "license": "SEE LICENSE IN LICENSE FILE",
+  "license": "MIT",
   "dependencies": {
     "allow2": "^2.0.0-alpha.1",
     "ws": "^8.18.0"

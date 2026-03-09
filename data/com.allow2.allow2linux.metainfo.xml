@@ -3,25 +3,25 @@
 <component type="desktop-application">
   <id>com.allow2.allow2linux</id>
 
-  <name>Allow2 Parental Controls</name>
-  <summary>Smart parental controls for Linux desktops and Steam Deck</summary>
+  <name>Allow2 Parental Freedom</name>
+  <summary>Smart parental freedom for Linux desktops and Steam Deck</summary>
 
   <developer id="com.allow2">
     <name>Allow2 Pty Ltd</name>
   </developer>
 
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>LicenseRef-proprietary=https://www.allow2.com/developer-license/</project_license>
+  <project_license>MIT</project_license>
 
   <description>
     <p>
-      Allow2 brings smart, activity-aware parental controls to Linux.
+      Allow2 brings smart, activity-aware parental freedom to Linux.
       Monitor and manage screen time, gaming, internet, and social media
       with per-activity quotas, progressive warnings, and request-more-time
       — all from the Allow2 app on your phone.
     </p>
     <p>
-      Unlike other parental controls that only let you set limits by day of
+      Unlike other parental control apps that only let you set limits by day of
       week, Allow2 uses Day Types — School Day, Weekend, Holiday, Sick Day,
       Birthday — so limits match how your family actually lives.
     </p>
@@ -64,7 +64,7 @@
     <internet>always</internet>
   </requires>
 
-  <!-- OARS 1.1 content rating: this is a parental control app, no content concerns -->
+  <!-- OARS 1.1 content rating: this is a parental freedom app, no content concerns -->
   <content_rating type="oars-1.1" />
 
   <releases>

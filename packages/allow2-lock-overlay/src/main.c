@@ -1,7 +1,7 @@
 /**
  * allow2-lock-overlay -- main.c
  *
- * Fullscreen SDL2 overlay for Allow2 parental controls on Linux.
+ * Fullscreen SDL2 overlay for Allow2 Parental Freedom on Linux.
  * Communicates with the allow2linux daemon via Unix domain socket (JSON).
  *
  * Build: make
