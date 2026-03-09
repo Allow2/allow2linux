@@ -46,12 +46,12 @@ modules:
         only-arches:
           - x86_64
         url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.gz
-        sha256: 9b9dd2f9b3e09cbfca222e0f3fee0e987e5765d3d7bf2d87afa0025d0e8a64d3
+        sha256: 24a5d58a1d4c2903478f4b7c3cfd2eeb5cea2cae3baee11a4dc6a1fed25fec6c
       - type: archive
         only-arches:
           - aarch64
         url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-arm64.tar.gz
-        sha256: b42e871f3d28289cd84a2e6e68e076d4fb3ce6ddc30eb9a58dd3d89c35c0fc39
+        sha256: 38bccb35c06ee4edbcd00c77976e3fad1d69d2e57c3c0c363d1700a2a2493278
 
   # ── allow2 SDK (Node.js) ────────────────────────────────────
   - name: allow2-sdk
