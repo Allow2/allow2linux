@@ -29,7 +29,7 @@
   "author": "Allow2 Pty Ltd",
   "license": "SEE LICENSE IN LICENSE FILE",
   "dependencies": {
-    "allow2": "file:../../../sdk/node",
+    "allow2": "^2.0.0-alpha.1",
     "ws": "^8.18.0"
   }
 }

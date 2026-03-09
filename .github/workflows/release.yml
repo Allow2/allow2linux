@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g. v1.0.0-alpha.1)'
+        required: true
+
+jobs:
+  # ── Build overlay for each arch ─────────────────────────────
+  build-overlay:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL2 dev headers
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev
+      - name: Build overlay
+        run: make -C packages/allow2-lock-overlay
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overlay-${{ matrix.arch }}
+          path: packages/allow2-lock-overlay/allow2-lock-overlay
+
+  # ── DEB package ─────────────────────────────────────────────
+  package-deb:
+    needs: build-overlay
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          name: overlay-${{ matrix.arch }}
+          path: overlay/
+      - name: Build DEB
+        run: |
+          echo "TODO: Build .deb package for ${{ matrix.arch }}"
+          # Scripts in packaging/deb/ will handle this
+      # - uses: actions/upload-artifact@v4
+      #   with:
+      #     name: deb-${{ matrix.arch }}
+      #     path: dist/*.deb
+
+  # ── RPM package ─────────────────────────────────────────────
+  package-rpm:
+    needs: build-overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build RPM
+        run: |
+          echo "TODO: Build .rpm package"
+          # Scripts in packaging/rpm/ will handle this
+
+  # ── AUR/PKGBUILD ───────────────────────────────────────────
+  package-aur:
+    needs: build-overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate PKGBUILD
+        run: |
+          echo "TODO: Generate PKGBUILD and push to AUR"
+          # Uses packaging/arch/PKGBUILD.template
+
+  # ── Flatpak bundle ─────────────────────────────────────────
+  package-flatpak:
+    needs: build-overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
+      - name: Build Flatpak
+        run: |
+          cd flatpak
+          flatpak-builder --force-clean --repo=repo build-dir flathub/com.allow2.allow2linux.yml
+      - name: Bundle Flatpak
+        run: |
+          cd flatpak
+          flatpak build-bundle repo com.allow2.allow2linux.flatpak com.allow2.allow2linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: flatpak/*.flatpak
+
+  # ── GitHub Release ──────────────────────────────────────────
+  release:
+    needs: [package-deb, package-rpm, package-flatpak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     path: dist/
+      - name: Create GitHub Release
+        run: |
+          echo "TODO: Create release with artifacts"
+          # gh release create $TAG dist/* --title "allow2linux $TAG" --generate-notes

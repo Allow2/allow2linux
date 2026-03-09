@@ -54,17 +54,6 @@ modules:
         url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-arm64.tar.gz
         sha256: 38bccb35c06ee4edbcd00c77976e3fad1d69d2e57c3c0c363d1700a2a2493278
 
-  # ── allow2 SDK (Node.js) ────────────────────────────────────
-  - name: allow2-sdk
-    buildsystem: simple
-    build-commands:
-      - mkdir -p /app/lib/allow2-sdk
-      - cp -r src package.json /app/lib/allow2-sdk/
-      - cd /app/lib/allow2-sdk && /app/bin/npm install --omit=dev --no-optional
-    sources:
-      - type: dir
-        path: ../../sdk/node
-
   # ── allow2-lock-overlay (C + SDL2) ──────────────────────────
   - name: allow2-lock-overlay
     buildsystem: simple
@@ -78,16 +67,13 @@ modules:
         path: ../packages/allow2-lock-overlay
 
   # ── allow2linux daemon (Node.js) ────────────────────────────
+  # All deps (allow2 SDK + ws + transitive) installed via npm from registry
   - name: allow2linux
     buildsystem: simple
     build-commands:
       - mkdir -p /app/lib/allow2linux
       - cp -r src config systemd package.json /app/lib/allow2linux/
-      # Remove the allow2 dep (it's installed as a sibling module, not via npm)
-      - cd /app/lib/allow2linux && sed -i '/"allow2"/d' package.json
       - cd /app/lib/allow2linux && /app/bin/npm install --omit=dev --no-optional
-      # Symlink the SDK so bare 'import "allow2"' resolves
-      - ln -s /app/lib/allow2-sdk /app/lib/allow2linux/node_modules/allow2
       # Install the launcher script
       - install -D -m 755 allow2linux.sh /app/bin/allow2linux
       # Desktop entry, metainfo, and icon from data/
