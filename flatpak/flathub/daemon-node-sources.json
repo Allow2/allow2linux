@@ -1,9 +1,0 @@
-[
-  {
-    "type": "file",
-    "url": "https://registry.npmjs.org/ws/-/ws-8.19.0.tgz",
-    "sha512": "6e5013da68ce1088b4673aee25f2216f79e9b3be0f4564c2cf5223825584129425e574bf50d6a66babb6feb8c59030e8baaaf82faeebcbed5a18800b5625a30e",
-    "dest": "npm-cache",
-    "dest-filename": "ws-8.19.0.tgz"
-  }
-]
