@@ -39,6 +39,7 @@ modules:
     buildsystem: simple
     build-commands:
       - install -D -m 755 bin/node /app/bin/node
+      - mkdir -p /app/lib
       - cp -r lib/node_modules /app/lib/node_modules
       - ln -s ../lib/node_modules/npm/bin/npm-cli.js /app/bin/npm
     sources:
