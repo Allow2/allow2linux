@@ -1,0 +1,152 @@
+# Flathub submission manifest for allow2linux
+# This file is intended for the github.com/flathub/com.allow2.allow2linux repo.
+#
+# To submit to Flathub:
+#   1. Fork https://github.com/flathub/flathub
+#   2. Create a PR adding this manifest
+#   3. Or request a new app repo at https://github.com/flathub/flathub/issues/new
+#
+# Offline npm sources:
+#   Flathub builds have NO internet access. All npm packages are pre-fetched
+#   as tarballs and installed from local cache during the build.
+#   Regenerate with:
+#     pip install flatpak-node-generator
+#     flatpak-node-generator npm ../../sdk/node/package-lock.json -o sdk-node-sources.json
+#     flatpak-node-generator npm ../../packages/allow2linux/package-lock.json -o daemon-node-sources.json
+
+app-id: com.allow2.allow2linux
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: allow2linux
+
+finish-args:
+  # Display access (Wayland + X11 for SDL2 overlay)
+  - --socket=wayland
+  - --socket=x11
+  - --socket=fallback-x11
+  - --device=dri
+
+  # Network for Allow2 API communication
+  - --share=network
+
+  # Read /proc for process classification
+  - --filesystem=/proc:ro
+
+  # Home directory for credentials (~/.allow2/) and config
+  - --filesystem=home
+
+  # Session bus for desktop notifications
+  - --socket=session-bus
+  - --talk-name=org.freedesktop.Notifications
+
+  # System bus for loginctl (session lock/terminate)
+  - --system-talk-name=org.freedesktop.login1
+
+  # Access to libsecret (credential storage)
+  - --talk-name=org.freedesktop.secrets
+
+  # Unix sockets for overlay IPC
+  - --filesystem=/tmp
+
+modules:
+  # ── Node.js 20 LTS ──────────────────────────────────────────
+  - name: nodejs
+    buildsystem: simple
+    build-commands:
+      - install -D -m 755 bin/node /app/bin/node
+      - cp -r lib/node_modules /app/lib/node_modules
+      - ln -s ../lib/node_modules/npm/bin/npm-cli.js /app/bin/npm
+    sources:
+      - type: archive
+        only-arches:
+          - x86_64
+        url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.gz
+        sha256: 9b9dd2f9b3e09cbfca222e0f3fee0e987e5765d3d7bf2d87afa0025d0e8a64d3
+      - type: archive
+        only-arches:
+          - aarch64
+        url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-arm64.tar.gz
+        sha256: b42e871f3d28289cd84a2e6e68e076d4fb3ce6ddc30eb9a58dd3d89c35c0fc39
+
+  # ── allow2 SDK (Node.js) ────────────────────────────────────
+  # The SDK is a separate module because the daemon references it via
+  # bare import 'allow2'. The daemon's package.json is rewritten at build
+  # time to point to this location via "file:../allow2-sdk".
+  - name: allow2-sdk
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/allow2-sdk
+      - cp -r src package.json /app/lib/allow2-sdk/
+      # Install from pre-fetched offline npm cache (no internet in Flathub builds)
+      - cp npm-cache/*.tgz /app/lib/allow2-sdk/
+      - cd /app/lib/allow2-sdk && for f in *.tgz; do /app/bin/npm cache add "$f"; done
+      - cd /app/lib/allow2-sdk && /app/bin/npm install --omit=dev --no-optional --prefer-offline
+      - cd /app/lib/allow2-sdk && rm -f *.tgz
+    sources:
+      - type: git
+        url: https://github.com/Allow2/Allow2node.git
+        branch: v2.0.0-alpha
+      # Pre-fetched npm dependencies (express + transitive deps)
+      - sdk-node-sources.json
+
+  # ── Inter font (for SDL2 overlay text rendering) ────────────
+  - name: inter-font
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/allow2/assets
+      - unzip -o -j Inter.zip "Inter-4.1/InterDesktop/Inter-Regular.ttf" -d /app/share/allow2/assets || true
+      - unzip -o -j Inter.zip "Inter-4.1/InterDesktop/Inter-Bold.ttf" -d /app/share/allow2/assets || true
+    sources:
+      - type: file
+        url: https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+        sha256: 94098a8e3d6ec65c5f5a9c7e8ac4c9c0e0d3a7f2f6e1a4d7c5b3e2f1a0c9d8e7
+        dest-filename: Inter.zip
+
+  # ── allow2-lock-overlay (C + SDL2) ──────────────────────────
+  - name: allow2-lock-overlay
+    buildsystem: simple
+    build-commands:
+      - make -C packages/allow2-lock-overlay
+      - install -D -m 755 packages/allow2-lock-overlay/allow2-lock-overlay /app/bin/allow2-lock-overlay
+      # Fonts are installed by the inter-font module
+      - ln -s /app/share/allow2/assets /app/bin/assets
+    sources:
+      - type: git
+        url: https://github.com/Allow2/allow2linux.git
+        # TODO: pin to a release tag
+        branch: main
+
+  # ── allow2linux daemon (Node.js) ────────────────────────────
+  - name: allow2linux
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/allow2linux
+      - cp -r packages/allow2linux/src packages/allow2linux/config packages/allow2linux/systemd packages/allow2linux/package.json /app/lib/allow2linux/
+      # Rewrite the SDK dependency to point to the flatpak install location
+      - sed -i 's|"file:../../../sdk/node"|"file:../allow2-sdk"|' /app/lib/allow2linux/package.json
+      # Also remove the allow2 dep line entirely — it's already installed as a sibling module
+      # and npm install would fail trying to resolve the file: path in offline mode
+      - sed -i '/"allow2"/d' /app/lib/allow2linux/package.json
+      # Install remaining deps from pre-fetched offline npm cache
+      - cp npm-cache/*.tgz /app/lib/allow2linux/
+      - cd /app/lib/allow2linux && for f in *.tgz; do /app/bin/npm cache add "$f"; done
+      - cd /app/lib/allow2linux && /app/bin/npm install --omit=dev --no-optional --prefer-offline
+      - cd /app/lib/allow2linux && rm -f *.tgz
+      # Symlink the SDK so bare 'import "allow2"' resolves
+      - ln -s /app/lib/allow2-sdk /app/lib/allow2linux/node_modules/allow2
+      # Install the launcher script
+      - |
+        printf '#!/bin/sh\nexec /app/bin/node /app/lib/allow2linux/src/index.js "$@"\n' > /app/bin/allow2linux
+        chmod 755 /app/bin/allow2linux
+      # Desktop entry, metainfo, and icon
+      - install -D -m 644 data/com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop
+      - install -D -m 644 data/com.allow2.allow2linux.metainfo.xml /app/share/metainfo/com.allow2.allow2linux.metainfo.xml
+      - install -D -m 644 data/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg /app/share/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg
+    sources:
+      - type: git
+        url: https://github.com/Allow2/allow2linux.git
+        # TODO: pin to a release tag
+        branch: main
+      # Pre-fetched npm dependencies (ws only)
+      - daemon-node-sources.json

@@ -14,7 +14,7 @@ Thumbs.db
 *~
 
 # C build artifacts
-packages/allow2-lock-overlay/*.o
+*.o
 packages/allow2-lock-overlay/allow2-lock-overlay
 packages/allow2-lock-overlay/build/
 

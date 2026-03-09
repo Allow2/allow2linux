@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- https://www.freedesktop.org/software/appstream/docs/ -->
+<component type="desktop-application">
+  <id>com.allow2.allow2linux</id>
+
+  <name>Allow2 Parental Controls</name>
+  <summary>Smart parental controls for Linux desktops and Steam Deck</summary>
+
+  <developer id="com.allow2">
+    <name>Allow2 Pty Ltd</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary=https://www.allow2.com/developer-license/</project_license>
+
+  <description>
+    <p>
+      Allow2 brings smart, activity-aware parental controls to Linux.
+      Monitor and manage screen time, gaming, internet, and social media
+      with per-activity quotas, progressive warnings, and request-more-time
+      — all from the Allow2 app on your phone.
+    </p>
+    <p>
+      Unlike other parental controls that only let you set limits by day of
+      week, Allow2 uses Day Types — School Day, Weekend, Holiday, Sick Day,
+      Birthday — so limits match how your family actually lives.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Per-activity quotas: separate limits for Gaming, Internet, Social Media, and total Screen Time</li>
+      <li>Cross-device tracking: gaming time on the PC counts against the same daily limit as the console or phone</li>
+      <li>Progressive warnings: 15min, 5min, 1min, 30sec, 10sec countdown before blocking</li>
+      <li>Request More Time: children request extra time from the lock screen; parents approve from their phone</li>
+      <li>Offline support: cached permissions with grace period — no lockout if WiFi drops</li>
+      <li>Steam Deck: works in both Game Mode (gamescope overlay) and Desktop Mode (SDL2 fullscreen overlay)</li>
+      <li>Process monitoring: automatically detects what your child is doing by scanning running applications</li>
+      <li>Parent Feedback Channel: report issues directly to Allow2 from the device</li>
+    </ul>
+    <p>
+      Works on Steam Deck, Ubuntu, Fedora, Arch, and any Linux distribution.
+      Parents manage everything from the free Allow2 app (iOS and Android).
+    </p>
+  </description>
+
+  <url type="homepage">https://www.allow2.com</url>
+  <url type="bugtracker">https://github.com/Allow2/allow2linux/issues</url>
+  <url type="help">https://www.allow2.com/support</url>
+  <url type="vcs-browser">https://github.com/Allow2/allow2linux</url>
+
+  <launchable type="desktop-id">com.allow2.allow2linux.desktop</launchable>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#4A90D9</color>
+    <color type="primary" scheme_preference="dark">#2C5F9E</color>
+  </branding>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+
+  <requires>
+    <internet>always</internet>
+  </requires>
+
+  <!-- OARS 1.1 content rating: this is a parental control app, no content concerns -->
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="1.0.0-alpha.1" date="2026-03-08">
+      <description>
+        <p>Initial alpha release with core features:</p>
+        <ul>
+          <li>Device pairing via 6-digit PIN or QR code</li>
+          <li>Child identification with OS user mapping or interactive selector</li>
+          <li>Per-activity enforcement with stacking quotas</li>
+          <li>Progressive warning system (15min to 10sec countdown)</li>
+          <li>Request More Time from lock screen</li>
+          <li>SDL2 overlay for Desktop Mode, Steam browser overlay for Game Mode</li>
+          <li>Offline caching with grace period</li>
+          <li>Process classification for automatic activity detection</li>
+          <li>Parent feedback channel</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <!-- TODO: Add screenshots before Flathub submission
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/lock-screen.png</image>
+      <caption>Lock screen with Request More Time button</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/child-selector.png</image>
+      <caption>Child selector — who's playing?</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/warning.png</image>
+      <caption>Progressive warning countdown</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/pairing.png</image>
+      <caption>Device pairing with QR code and PIN</caption>
+    </screenshot>
+  </screenshots>
+  -->
+</component>

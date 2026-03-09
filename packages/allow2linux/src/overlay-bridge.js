@@ -205,6 +205,14 @@ export class OverlayBridge extends EventEmitter {
             this._reopenTimer = null;
         }
         this._send({ screen: 'dismiss' });
+        // In SDL2 mode, kill the binary after dismiss — it will be
+        // respawned on-demand when the next screen is needed.
+        // This ensures no process lingers with a hidden fullscreen window.
+        if (this._mode === 'sdl2' && this._sdlProcess) {
+            console.log('[overlay] killing SDL2 binary after dismiss');
+            try { this._sdlProcess.kill('SIGTERM'); } catch (_e) { /* */ }
+            this._sdlProcess = null;
+        }
     }
 
     // ── Unified send/show ─────────────────────────────────────
@@ -212,13 +220,26 @@ export class OverlayBridge extends EventEmitter {
     _showScreen(screenName, data) {
         this._currentScreen = screenName;
         this._screenData = data;
-        this._send(data);
 
         if (this._mode === 'steam') {
+            this._send(data);
             var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + screenName;
             this._openSteamUrl(url);
+        } else {
+            // SDL2: spawn binary on-demand if not running (deferred start)
+            if (!this._sdlProcess) {
+                var binaryPath = this._findOverlayBinary();
+                if (binaryPath) {
+                    console.log('[overlay] spawning SDL2 on-demand for screen: ' + screenName);
+                    this._spawnSdl2(binaryPath);
+                    // Binary will connect and receive current screen via _sdlServer 'connection' handler
+                } else {
+                    console.error('[overlay] SDL2 binary not found, cannot show screen');
+                }
+            } else {
+                this._sendSdl(data);
+            }
         }
-        // SDL2: binary is always running, just send the message — it shows/hides itself
     }
 
     _send(message) {
@@ -606,7 +627,11 @@ export class OverlayBridge extends EventEmitter {
         return new Promise(function (resolve) {
             self._sdlServer.listen(SOCKET_PATH, function () {
                 console.log('[overlay] Unix socket listening at ' + SOCKET_PATH);
-                self._spawnSdl2(binaryPath);
+                // Don't spawn binary yet — it will be spawned on-demand
+                // when the first screen needs to be shown (deferred start).
+                // This prevents a fullscreen overlay from blocking the desktop
+                // when the device is unpaired or idle.
+                console.log('[overlay] SDL2 binary deferred until first screen');
                 resolve();
             });
         });
@@ -624,8 +649,10 @@ export class OverlayBridge extends EventEmitter {
             if (sessionEnv.DISPLAY) sdlEnv.DISPLAY = sessionEnv.DISPLAY;
             if (sessionEnv.WAYLAND_DISPLAY) sdlEnv.WAYLAND_DISPLAY = sessionEnv.WAYLAND_DISPLAY;
             if (sessionEnv.XDG_RUNTIME_DIR) sdlEnv.XDG_RUNTIME_DIR = sessionEnv.XDG_RUNTIME_DIR;
+            if (sessionEnv.XAUTHORITY) sdlEnv.XAUTHORITY = sessionEnv.XAUTHORITY;
             console.log('[overlay] discovered display env: DISPLAY=' + (sdlEnv.DISPLAY || 'unset')
-                + ' WAYLAND_DISPLAY=' + (sdlEnv.WAYLAND_DISPLAY || 'unset'));
+                + ' WAYLAND_DISPLAY=' + (sdlEnv.WAYLAND_DISPLAY || 'unset')
+                + ' XAUTHORITY=' + (sdlEnv.XAUTHORITY || 'unset'));
         }
 
         console.log('[overlay] spawning SDL2 binary: ' + binaryPath);
@@ -873,6 +900,9 @@ function _discoverDisplayEnv() {
                                     if (!result.DISPLAY && vars[v].indexOf('DISPLAY=') === 0) {
                                         result.DISPLAY = vars[v].split('=')[1];
                                     }
+                                    if (!result.XAUTHORITY && vars[v].indexOf('XAUTHORITY=') === 0) {
+                                        result.XAUTHORITY = vars[v].split('=')[1];
+                                    }
                                 }
                             }
                         } catch (_e) { /* */ }
@@ -883,6 +913,17 @@ function _discoverDisplayEnv() {
             } catch (_e) { /* */ }
         }
     } catch (_e) { /* */ }
+
+    // Fallback: find XAUTHORITY from Mutter Xwayland auth files (KDE/GNOME on Wayland)
+    if (!result.XAUTHORITY) {
+        try {
+            var xauthGlob = execSync(
+                'ls /run/user/*/.[mM]utter-Xwaylandauth.* 2>/dev/null | head -1',
+                { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+            ).trim();
+            if (xauthGlob) result.XAUTHORITY = xauthGlob;
+        } catch (_e) { /* */ }
+    }
 
     // Fallback: try common defaults
     if (!result.DISPLAY && !result.WAYLAND_DISPLAY) {

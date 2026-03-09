@@ -66,11 +66,19 @@ typedef struct {
     /* Frame timing */
     Uint32 last_frame_time;
 
+    /* Watchdog: last time we received a message from daemon */
+    Uint32 last_message_time;
+
     /* Game controller */
     SDL_GameController *controller;
 
     /* Mode: 0 = overlay (default), 1 = app (normal windowed) */
     int app_mode;
+
+    /* Overlay mode display info (for deferred window creation) */
+    int is_gamescope;
+    int display_w;
+    int display_h;
 } AppState;
 
 static AppState state;
@@ -154,8 +162,47 @@ static void send_event(const char *json_str) {
     socket_write("\n", 1);
 }
 
+/* Forward declarations for deferred window creation */
+static SDL_Window *g_window;
+static SDL_Renderer *g_renderer;
+
 static void show_window(SDL_Window *window) {
-    if (!state.window_visible) {
+    /* Overlay mode: deferred window creation on first show */
+    if (!window && !state.app_mode) {
+        Uint32 win_flags;
+        if (state.is_gamescope) {
+            win_flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS |
+                        SDL_WINDOW_ALWAYS_ON_TOP;
+            g_window = SDL_CreateWindow("Allow2",
+                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                0, 0, win_flags);
+        } else {
+            win_flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP;
+            g_window = SDL_CreateWindow("Allow2",
+                0, 0, state.display_w, state.display_h, win_flags);
+        }
+        if (!g_window) {
+            fprintf(stderr, "[overlay] deferred SDL_CreateWindow failed: %s\n", SDL_GetError());
+            return;
+        }
+        /* Create renderer for the new window */
+        g_renderer = SDL_CreateRenderer(g_window, -1,
+            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!g_renderer) {
+            g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
+        }
+        if (g_renderer) {
+            SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+        }
+        if (!state.app_mode) {
+            set_gamescope_overlay(g_window);
+        }
+        fprintf(stderr, "[overlay] deferred window created (screen=%d)\n", state.screen);
+        state.window_visible = 1;
+        return;
+    }
+
+    if (window && !state.window_visible) {
         SDL_ShowWindow(window);
         SDL_RaiseWindow(window);
         state.window_visible = 1;
@@ -164,7 +211,19 @@ static void show_window(SDL_Window *window) {
 }
 
 static void hide_window(SDL_Window *window) {
-    if (state.window_visible) {
+    /* Overlay mode with deferred window: destroy it entirely to free the screen */
+    if (!state.app_mode && g_window) {
+        if (g_renderer) {
+            SDL_DestroyRenderer(g_renderer);
+            g_renderer = NULL;
+        }
+        SDL_DestroyWindow(g_window);
+        g_window = NULL;
+        state.window_visible = 0;
+        fprintf(stderr, "[overlay] deferred window destroyed\n");
+        return;
+    }
+    if (window && state.window_visible) {
         SDL_HideWindow(window);
         state.window_visible = 0;
     }
@@ -351,12 +410,13 @@ static void dispatch_event(SDL_Event *event, SDL_Window *window) {
 int main(int argc, char *argv[]) {
     const char *socket_path = "/tmp/allow2-overlay.sock";
     char assets_path[512];
-    SDL_Window *window;
-    SDL_Renderer *renderer;
+    SDL_Window *window = NULL;
+    SDL_Renderer *renderer = NULL;
     SDL_Event event;
     char msg_buf[4096];
     int i;
     int app_mode = 0;  /* 0 = overlay, 1 = app (normal windowed) */
+    int render_initialized = 0;
 
     /* Parse args */
     for (i = 1; i < argc; i++) {
@@ -380,12 +440,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Create window (initially hidden).
-     * App mode: normal resizable window for user-launched Allow2 app.
-     * Overlay mode:
-     *   In Game Mode (gamescope/X11): use FULLSCREEN_DESKTOP for raw panel access.
-     *   In Desktop Mode (Wayland/KDE): use borderless maximized window so the
-     *   compositor handles display rotation (Steam Deck panel is physically portrait). */
+    /* Create window.
+     * App mode: normal resizable window, shown immediately.
+     * Overlay mode: window is DEFERRED — not created until daemon sends a screen.
+     *   This prevents a fullscreen window from blocking the desktop when idle.
+     *   Window will be created on first show_window() call. */
     if (state.app_mode) {
         Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
         window = SDL_CreateWindow("Allow2",
@@ -393,76 +452,70 @@ int main(int argc, char *argv[]) {
             900, 600, win_flags);
         fprintf(stderr, "[app] windowed mode 900x600\n");
     } else {
-        SDL_DisplayMode dm;
-        int is_gamescope = 0;
-        Uint32 win_flags;
+        /* Overlay mode: detect display info but DON'T create window yet */
+        const char *video_driver = SDL_GetCurrentVideoDriver();
+        state.is_gamescope = (video_driver && strcmp(video_driver, "x11") == 0) ? 1 : 0;
+        fprintf(stderr, "[overlay] video driver: %s (gamescope=%d)\n",
+                video_driver ? video_driver : "?", state.is_gamescope);
 
-        /* Detect gamescope by checking for :1 display (inner Xwayland) */
-        {
-            const char *video_driver = SDL_GetCurrentVideoDriver();
-            if (video_driver && strcmp(video_driver, "x11") == 0) {
-                is_gamescope = 1;  /* X11 on Steam Deck = Game Mode */
-            }
-            fprintf(stderr, "[overlay] video driver: %s (gamescope=%d)\n",
-                    video_driver ? video_driver : "?", is_gamescope);
-        }
-
-        if (is_gamescope) {
-            /* Game Mode: gamescope handles rotation, use fullscreen desktop */
-            win_flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS |
-                        SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_HIDDEN;
-            window = SDL_CreateWindow("Allow2",
-                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                0, 0, win_flags);
-        } else {
-            /* Desktop Mode: get the rotated screen size from the compositor */
+        if (!state.is_gamescope) {
+            SDL_DisplayMode dm;
             if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
                 fprintf(stderr, "[overlay] display mode: %dx%d\n", dm.w, dm.h);
+                state.display_w = dm.w;
+                state.display_h = dm.h;
             } else {
-                dm.w = 1280;
-                dm.h = 800;
+                state.display_w = 1280;
+                state.display_h = 800;
             }
-            win_flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP |
-                        SDL_WINDOW_HIDDEN;
-            window = SDL_CreateWindow("Allow2",
-                0, 0, dm.w, dm.h, win_flags);
         }
+
+        /* Window stays NULL until needed — created in show_window() */
+        window = NULL;
     }
-    if (!window) {
+    /* App mode: verify window was created. Overlay mode: window is NULL (deferred). */
+    if (state.app_mode && !window) {
         fprintf(stderr, "[overlay] SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
 
     /* Register as gamescope overlay (required for visibility in Game Mode).
-     * Skip in app mode -- not an overlay, just a regular window. */
-    if (!state.app_mode) {
-        set_gamescope_overlay(window);
+     * Skip in app mode -- not an overlay, just a regular window.
+     * In overlay mode, this is done later when window is created in show_window(). */
+    if (state.app_mode) {
+        /* no-op: app mode doesn't need gamescope overlay */
     }
 
-    /* Create renderer */
-    renderer = SDL_CreateRenderer(
-        window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
-    );
-    if (!renderer) {
-        fprintf(stderr, "[overlay] accelerated renderer failed, trying software\n");
-        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-    }
-    if (!renderer) {
-        fprintf(stderr, "[overlay] SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+    /* Create renderer — only if window exists (app mode).
+     * Overlay mode: renderer created alongside deferred window in show_window(). */
+    if (window) {
+        renderer = SDL_CreateRenderer(
+            window, -1,
+            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
+        );
+        if (!renderer) {
+            fprintf(stderr, "[overlay] accelerated renderer failed, trying software\n");
+            renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        }
+        if (!renderer) {
+            fprintf(stderr, "[overlay] SDL_CreateRenderer failed: %s\n", SDL_GetError());
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     }
 
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-    /* Load assets (fonts, sets up logical resolution) */
+    /* Load assets (fonts, sets up logical resolution).
+     * In overlay mode, renderer is NULL here (deferred) — init later. */
     resolve_assets_path(assets_path, sizeof(assets_path));
-    if (render_init(renderer, assets_path) < 0) {
-        fprintf(stderr, "[overlay] WARNING: render_init failed -- "
-                "text won't render\n");
+    if (renderer) {
+        if (render_init(renderer, assets_path) < 0) {
+            fprintf(stderr, "[overlay] WARNING: render_init failed -- "
+                    "text won't render\n");
+        }
+        render_initialized = 1;
     }
 
     /* Open game controller if present */
@@ -491,6 +544,7 @@ int main(int argc, char *argv[]) {
     }
 
     state.last_frame_time = SDL_GetTicks();
+    state.last_message_time = SDL_GetTicks();
 
     /* In app mode, window is already shown at creation */
     if (state.app_mode) {
@@ -519,8 +573,20 @@ int main(int argc, char *argv[]) {
             int n = socket_read_line(msg_buf, sizeof(msg_buf));
             if (n > 0) {
                 handle_message(msg_buf);
+                state.last_message_time = SDL_GetTicks();
             } else {
                 break;
+            }
+        }
+
+        /* Watchdog: in overlay mode, exit if no message from daemon for 60s.
+         * This prevents a stale overlay from locking the screen. */
+        if (!state.app_mode && !socket_is_connected()) {
+            Uint32 silence = SDL_GetTicks() - state.last_message_time;
+            if (silence > 60000) {
+                fprintf(stderr, "[overlay] watchdog: no daemon contact for %ums, exiting\n", silence);
+                state.running = 0;
+                continue;
             }
         }
 
@@ -529,6 +595,11 @@ int main(int argc, char *argv[]) {
         if (state.screen == SCREEN_NONE) {
             if (!state.app_mode) {
                 hide_window(window);
+                /* Sync locals — deferred window was destroyed */
+                if (!g_window) {
+                    window = NULL;
+                    renderer = NULL;
+                }
             }
 
             if (SDL_WaitEventTimeout(&event, 500)) {
@@ -555,6 +626,25 @@ int main(int argc, char *argv[]) {
 
         show_window(window);
 
+        /* Sync local pointers after deferred window creation */
+        if (!window && g_window) {
+            window = g_window;
+            renderer = g_renderer;
+            if (!render_initialized && renderer) {
+                if (render_init(renderer, assets_path) < 0) {
+                    fprintf(stderr, "[overlay] WARNING: deferred render_init failed\n");
+                }
+                render_initialized = 1;
+            }
+        }
+
+        /* If still no renderer, skip frame (deferred creation failed) */
+        if (!renderer) {
+            state.last_frame_time = SDL_GetTicks();
+            SDL_Delay(100);
+            continue;
+        }
+
         /* Compute delta time */
         now = SDL_GetTicks();
         dt = (float)(now - state.last_frame_time) / 1000.0f;
@@ -573,11 +663,16 @@ int main(int argc, char *argv[]) {
                 break;
 
             case SDL_KEYDOWN:
-                /* App mode: ESC always exits (even on lock screen).
-                 * Overlay mode: ESC blocked on lock screen. */
+                /* App mode: ESC always exits.
+                 * Overlay mode: ESC on non-lock screens dismisses (returns
+                 * to SCREEN_NONE which destroys the deferred window).
+                 * On lock screen: ESC is blocked entirely. */
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
-                    if (state.app_mode || state.screen != SCREEN_LOCK) {
+                    if (state.app_mode) {
                         state.running = 0;
+                    } else if (state.screen != SCREEN_LOCK) {
+                        state.screen = SCREEN_NONE;
+                        send_event("{\"event\":\"dismissed\"}");
                     }
                 }
                 dispatch_event(&event, window);
@@ -667,10 +762,13 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     socket_disconnect();
-    render_cleanup();
+    if (render_initialized) render_cleanup();
     if (state.controller) SDL_GameControllerClose(state.controller);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+    /* Destroy whichever window/renderer exists (local or deferred global) */
+    if (renderer) SDL_DestroyRenderer(renderer);
+    else if (g_renderer) SDL_DestroyRenderer(g_renderer);
+    if (window) SDL_DestroyWindow(window);
+    else if (g_window) SDL_DestroyWindow(g_window);
     SDL_Quit();
 
     return 0;

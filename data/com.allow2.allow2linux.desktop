@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Allow2 Parental Controls
+GenericName=Parental Controls
+Comment=Smart parental controls for Linux desktops and Steam Deck
+Exec=allow2linux
+Icon=com.allow2.allow2linux
+Type=Application
+Categories=System;Utility;
+Keywords=parental;controls;screen;time;kids;family;gaming;allow2;
+NoDisplay=true
+X-Flatpak=com.allow2.allow2linux

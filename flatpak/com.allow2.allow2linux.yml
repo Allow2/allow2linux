@@ -70,6 +70,8 @@ modules:
     build-commands:
       - make
       - install -D -m 755 allow2-lock-overlay /app/bin/allow2-lock-overlay
+      - install -D -m 644 assets/Inter-Regular.ttf /app/bin/assets/Inter-Regular.ttf
+      - install -D -m 644 assets/Inter-Bold.ttf /app/bin/assets/Inter-Bold.ttf
     sources:
       - type: dir
         path: ../packages/allow2-lock-overlay
@@ -80,62 +82,27 @@ modules:
     build-commands:
       - mkdir -p /app/lib/allow2linux
       - cp -r src config systemd package.json /app/lib/allow2linux/
-      # Rewrite the SDK dependency to point to the flatpak install location
-      - cd /app/lib/allow2linux && sed -i 's|"file:../../../sdk/node"|"file:../allow2-sdk"|' package.json
+      # Remove the allow2 dep (it's installed as a sibling module, not via npm)
+      - cd /app/lib/allow2linux && sed -i '/"allow2"/d' package.json
       - cd /app/lib/allow2linux && /app/bin/npm install --omit=dev --no-optional
+      # Symlink the SDK so bare 'import "allow2"' resolves
+      - ln -s /app/lib/allow2-sdk /app/lib/allow2linux/node_modules/allow2
       # Install the launcher script
       - install -D -m 755 allow2linux.sh /app/bin/allow2linux
-      # Desktop entry and icon
-      - install -D -m 644 com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop
-      - install -D -m 644 com.allow2.allow2linux.metainfo.xml /app/share/metainfo/com.allow2.allow2linux.metainfo.xml
+      # Desktop entry, metainfo, and icon from data/
+      - install -D -m 644 data/com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop
+      - install -D -m 644 data/com.allow2.allow2linux.metainfo.xml /app/share/metainfo/com.allow2.allow2linux.metainfo.xml
+      - install -D -m 644 data/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg /app/share/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg
     sources:
       - type: dir
         path: ../packages/allow2linux
+      # Pull in data/ from repo root
+      - type: dir
+        path: ../data
+        dest: data
       # Launcher script
       - type: inline
         dest-filename: allow2linux.sh
         contents: |
           #!/bin/sh
           exec /app/bin/node /app/lib/allow2linux/src/index.js "$@"
-      # Desktop entry
-      - type: inline
-        dest-filename: com.allow2.allow2linux.desktop
-        contents: |
-          [Desktop Entry]
-          Name=Allow2 Parental Controls
-          Comment=Parental controls for Linux
-          Exec=allow2linux
-          Icon=com.allow2.allow2linux
-          Type=Application
-          Categories=System;Utility;
-          NoDisplay=true
-          X-Flatpak-RenamedFrom=allow2linux
-      # AppStream metainfo
-      - type: inline
-        dest-filename: com.allow2.allow2linux.metainfo.xml
-        contents: |
-          <?xml version="1.0" encoding="UTF-8"?>
-          <component type="desktop-application">
-            <id>com.allow2.allow2linux</id>
-            <name>Allow2 Parental Controls</name>
-            <summary>Smart parental controls for Linux desktops and Steam Deck</summary>
-            <metadata_license>CC0-1.0</metadata_license>
-            <project_license>LicenseRef-proprietary</project_license>
-            <description>
-              <p>
-                Allow2 brings smart, activity-aware parental controls to Linux.
-                Monitor and manage screen time, gaming, internet, and social media
-                with per-activity quotas, progressive warnings, and request-more-time.
-              </p>
-              <p>
-                Works on Steam Deck (Gaming Mode and Desktop Mode), Ubuntu, Fedora,
-                Arch, and any Linux distribution.
-              </p>
-            </description>
-            <url type="homepage">https://www.allow2.com</url>
-            <releases>
-              <release version="1.0.0-alpha.1" date="2026-03-08">
-                <description><p>Initial alpha release.</p></description>
-              </release>
-            </releases>
-          </component>
