@@ -32,8 +32,9 @@ jobs:
         run: make -C packages/allow2-lock-overlay
 
   # ── Generate Flatpak offline sources ────────────────────────
-  # Regenerates yarn.lock + flatpak-node-generator output when
-  # package.json changes. Commits result back to the repo.
+  # Regenerates node-sources.json from the real yarn.lock so
+  # flatpak-builder can install all deps (allow2 SDK + ws + express
+  # + all transitive) in offline mode.
   flatpak-sources:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -55,52 +56,30 @@ jobs:
       - name: Install flatpak-node-generator
         run: pip install flatpak-node-generator
 
-      - name: Generate SDK yarn.lock and sources
+      - name: Refresh yarn.lock from latest npm registry
         run: |
-          cd /tmp
-          mkdir sdk-offline && cd sdk-offline
-          # Create a minimal package.json matching the SDK's deps
-          cat > package.json << 'EOF'
-          {
-            "name": "allow2-sdk-flatpak",
-            "private": true,
-            "dependencies": {
-              "express": "^4.21.0"
-            }
-          }
-          EOF
-          yarn install
-          flatpak-node-generator yarn yarn.lock -o sdk-node-sources.json
-          cp sdk-node-sources.json $GITHUB_WORKSPACE/flatpak/
+          cd packages/allow2linux
+          yarn install --no-immutable
+          echo "==> yarn.lock updated"
 
-      - name: Generate daemon yarn.lock and sources
+      - name: Generate Flatpak offline sources from real yarn.lock
         run: |
-          cd /tmp
-          mkdir daemon-offline && cd daemon-offline
-          # Daemon only needs ws (allow2 SDK is symlinked separately)
-          cat > package.json << 'EOF'
-          {
-            "name": "allow2linux-flatpak",
-            "private": true,
-            "dependencies": {
-              "ws": "^8.18.0"
-            }
-          }
-          EOF
-          yarn install
-          flatpak-node-generator yarn yarn.lock -o daemon-node-sources.json
-          cp daemon-node-sources.json $GITHUB_WORKSPACE/flatpak/
+          flatpak-node-generator yarn packages/allow2linux/yarn.lock \
+            -o flatpak/flathub/node-sources.json
+          echo "==> Generated node-sources.json with $(grep -c '"type"' flatpak/flathub/node-sources.json) entries"
 
       - name: Check for changes
         id: changes
         run: |
-          git diff --quiet flatpak/ && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+          git diff --quiet flatpak/ packages/allow2linux/yarn.lock && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
 
       - name: Commit updated sources
         if: steps.changes.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add flatpak/sdk-node-sources.json flatpak/daemon-node-sources.json
+          git add flatpak/flathub/node-sources.json packages/allow2linux/yarn.lock
+          # Clean up old split files if they exist
+          git rm -f flatpak/sdk-node-sources.json flatpak/daemon-node-sources.json 2>/dev/null || true
           git commit -m "ci: regenerate Flatpak offline sources"
           git push
