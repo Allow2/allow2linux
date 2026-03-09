@@ -35,8 +35,19 @@ pkill -9 -f allow2linux 2>/dev/null || true
 pkill -9 -f allow2-lock-overlay 2>/dev/null || true
 fuser -k 3000/tcp 2>/dev/null || true
 sleep 2
-# Double-tap in case something respawned
 fuser -k 3000/tcp 2>/dev/null || true
+
+echo "==> Fetching latest node-sources.json from GitHub..."
+# Try both possible paths (flathub/ subdir and flatpak/ root)
+if curl -fsSL -o node-sources.json \
+    "https://raw.githubusercontent.com/Allow2/allow2linux/main/flatpak/flathub/node-sources.json" 2>/dev/null; then
+    echo "    Downloaded from flatpak/flathub/ ($(wc -c < node-sources.json) bytes)"
+elif curl -fsSL -o node-sources.json \
+    "https://raw.githubusercontent.com/Allow2/allow2linux/main/flatpak/node-sources.json" 2>/dev/null; then
+    echo "    Downloaded from flatpak/ ($(wc -c < node-sources.json) bytes)"
+else
+    echo "    WARNING: Could not fetch from GitHub, using local copy"
+fi
 
 echo "==> Nuking flatpak-builder cache..."
 rm -rf .flatpak-builder/git .flatpak-builder/build .flatpak-builder/checksums
