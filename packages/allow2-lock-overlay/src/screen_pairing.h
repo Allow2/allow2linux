@@ -10,17 +10,25 @@
 
 #include "render.h"
 
+/* Max QR module grid: version 10 = 57x57 = 3249 modules */
+#define QR_MAX_SIZE  64
+#define QR_MAX_MODULES (QR_MAX_SIZE * QR_MAX_SIZE)
+
 /* Pairing screen state */
 typedef struct {
     char  pin[8];          /* 6-digit PIN string (null-terminated) */
     char  qr_data[512];   /* URL for QR code */
+    int   qr_size;         /* QR grid dimension (e.g. 29 for version 3) */
+    char  qr_modules[QR_MAX_MODULES + 1]; /* Flat '0'/'1' grid, row-major */
     float pulse_time;      /* Accumulated time for pulse animation */
 } PairingScreenState;
 
 /* Initialize / update state from daemon JSON message fields.
+ * qr_size = grid dimension (e.g. 29), qr_modules = flat '0'/'1' string.
  * Resets pulse_time to 0. */
 void screen_pairing_set(PairingScreenState *state,
-                        const char *pin, const char *qr_data);
+                        const char *pin, const char *qr_data,
+                        int qr_size, const char *qr_modules);
 
 /* Render one frame of the pairing screen.
  * dt = seconds elapsed since last frame (e.g., 0.016 for 60fps). */

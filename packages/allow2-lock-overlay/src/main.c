@@ -198,7 +198,9 @@ static void handle_message(const char *json_str) {
         state.screen = SCREEN_PAIRING;
         screen_pairing_set(&state.pairing,
                            json_get_string(&msg, "pin"),
-                           json_get_string(&msg, "qrData"));
+                           json_get_string(&msg, "qrData"),
+                           json_get_int(&msg, "qrSize", 0),
+                           json_get_string(&msg, "qrModules"));
     }
     else if (strcmp(screen, "selector") == 0) {
         state.screen = SCREEN_SELECTOR;
@@ -330,14 +332,46 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Create fullscreen window (initially hidden) */
-    window = SDL_CreateWindow(
-        "Allow2",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        0, 0,
-        SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS |
-        SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_HIDDEN
-    );
+    /* Create fullscreen window (initially hidden).
+     * In Game Mode (gamescope/X11): use FULLSCREEN_DESKTOP for raw panel access.
+     * In Desktop Mode (Wayland/KDE): use borderless maximized window so the
+     * compositor handles display rotation (Steam Deck panel is physically portrait). */
+    {
+        SDL_DisplayMode dm;
+        int is_gamescope = 0;
+        Uint32 win_flags;
+
+        /* Detect gamescope by checking for :1 display (inner Xwayland) */
+        {
+            const char *video_driver = SDL_GetCurrentVideoDriver();
+            if (video_driver && strcmp(video_driver, "x11") == 0) {
+                is_gamescope = 1;  /* X11 on Steam Deck = Game Mode */
+            }
+            fprintf(stderr, "[overlay] video driver: %s (gamescope=%d)\n",
+                    video_driver ? video_driver : "?", is_gamescope);
+        }
+
+        if (is_gamescope) {
+            /* Game Mode: gamescope handles rotation, use fullscreen desktop */
+            win_flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS |
+                        SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_HIDDEN;
+            window = SDL_CreateWindow("Allow2",
+                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                0, 0, win_flags);
+        } else {
+            /* Desktop Mode: get the rotated screen size from the compositor */
+            if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
+                fprintf(stderr, "[overlay] display mode: %dx%d\n", dm.w, dm.h);
+            } else {
+                dm.w = 1280;
+                dm.h = 800;
+            }
+            win_flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP |
+                        SDL_WINDOW_HIDDEN;
+            window = SDL_CreateWindow("Allow2",
+                0, 0, dm.w, dm.h, win_flags);
+        }
+    }
     if (!window) {
         fprintf(stderr, "[overlay] SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();

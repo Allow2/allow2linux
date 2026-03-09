@@ -17,7 +17,6 @@ import { SessionManager } from './session.js';
 import { OverlayBridge } from './overlay-bridge.js';
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
 
 const classifier = new ProcessClassifier();
 const steam = new SteamMonitor();
@@ -97,33 +96,20 @@ overlay.on('switch-child', function () {
 daemon.on('pairing-required', function (info) {
     console.log('Device not paired. PIN: ' + info.pin);
     console.log('Pairing wizard running at: ' + info.url);
-    // Log network-accessible URL for pairing from another device
-    try {
-        var nets = networkInterfaces();
-        for (var iface in nets) {
-            var addrs = nets[iface];
-            if (!addrs) continue;
-            for (var j = 0; j < addrs.length; j++) {
-                if (addrs[j].family === 'IPv4' && !addrs[j].internal) {
-                    console.log('  Also available at: http://' + addrs[j].address + ':3000');
-                }
-            }
-        }
-    } catch (_e) { /* */ }
+
+    // Universal deep link — works on all platforms:
+    //   iOS/Android with Allow2 app: deep links to "connect device" screen
+    //   iOS/Android without app: redirects to App Store / Play Store
+    //   Desktop browser: opens Allow2 web app's device pairing page
+    var qrData = 'https://app.allow2.com/pair?pin=' + info.pin;
 
     if (overlay.isAvailable()) {
-        // Overlay running: show pairing screen (works in both Game Mode and Desktop)
         overlay.showPairingScreen({
             pin: info.pin,
-            message: 'Open the Allow2 app on your phone and enter this PIN',
+            qrData: qrData,
+            message: 'Scan with your phone to set up parental controls',
         });
     } else {
-        // No overlay: open browser + notification
-        try {
-            execSync('xdg-open ' + info.url + ' 2>/dev/null &');
-        } catch (_err) {
-            // Browser open failed — PIN is still in logs
-        }
         notifier.notify('Allow2 setup: enter PIN ' + info.pin + ' in the Allow2 app on your phone', 'info');
     }
 });

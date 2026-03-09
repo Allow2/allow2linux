@@ -30,77 +30,69 @@
 /* ---- Public API ---- */
 
 void screen_pairing_set(PairingScreenState *state, const char *pin,
-                        const char *qr_data)
+                        const char *qr_data, int qr_size,
+                        const char *qr_modules)
 {
     if (!state) return;
     memset(state->pin, 0, sizeof(state->pin));
     memset(state->qr_data, 0, sizeof(state->qr_data));
+    memset(state->qr_modules, 0, sizeof(state->qr_modules));
+    state->qr_size = 0;
     state->pulse_time = 0.0f;
     if (pin) strncpy(state->pin, pin, sizeof(state->pin) - 1);
     if (qr_data) strncpy(state->qr_data, qr_data, sizeof(state->qr_data) - 1);
+    if (qr_size > 0 && qr_size <= QR_MAX_SIZE && qr_modules) {
+        state->qr_size = qr_size;
+        strncpy(state->qr_modules, qr_modules, sizeof(state->qr_modules) - 1);
+    }
 }
 
 /* ---- Render helpers ---- */
 
-static void render_qr_placeholder(SDL_Renderer *renderer, const char *qr_data)
+static void render_qr_code(SDL_Renderer *renderer,
+                           int qr_size, const char *qr_modules)
 {
     int x = QR_CENTER_X - QR_SIZE / 2;
     int y = QR_CENTER_Y - QR_SIZE / 2;
     SDL_Color white = {255, 255, 255, 255};
-    SDL_Color border = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
-    SDL_Color finder = {51, 51, 51, 180};
-    int sq = 24;
-    TTF_Font *label_font;
-    TTF_Font *url_font;
+    SDL_Color black = {0, 0, 0, 255};
 
-    /* White background */
+    /* White background with quiet zone */
     render_rounded_rect(renderer, x, y, QR_SIZE, QR_SIZE, 8, white);
 
-    /* Border */
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, border.r, border.g, border.b, border.a);
-    {
-        SDL_Rect outline = {x, y, QR_SIZE, QR_SIZE};
-        SDL_RenderDrawRect(renderer, &outline);
-    }
+    if (qr_size > 0 && qr_modules && qr_modules[0]) {
+        /* Calculate module pixel size with quiet zone (2 modules each side) */
+        int total_modules = qr_size + 4; /* 2-module quiet zone on each side */
+        int mod_px = QR_SIZE / total_modules;
+        int grid_px = mod_px * total_modules;
+        int offset_x = x + (QR_SIZE - grid_px) / 2;
+        int offset_y = y + (QR_SIZE - grid_px) / 2;
+        int quiet = 2 * mod_px;
+        int r, c;
 
-    /* Corner squares */
-    render_filled_rect(renderer, x + 12, y + 12, sq, sq, finder);
-    render_filled_rect(renderer, x + QR_SIZE - 12 - sq, y + 12, sq, sq, finder);
-    render_filled_rect(renderer, x + 12, y + QR_SIZE - 12 - sq, sq, sq, finder);
-
-    /* "Scan QR Code" label */
-    label_font = render_get_font(FONT_BOLD_20);
-    if (label_font) {
-        SDL_Color dark = {51, 51, 51, 255};
-        int tw = render_text_width(label_font, "Scan QR Code");
-        render_text(renderer, label_font, "Scan QR Code",
-                    x + (QR_SIZE - tw) / 2, y + QR_SIZE / 2 - 10, dark);
-    }
-
-    /* URL below QR box */
-    if (qr_data && qr_data[0]) {
-        url_font = render_get_font(FONT_REGULAR_16);
-        if (url_font) {
-            char url_display[64];
-            size_t len = strlen(qr_data);
-            SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
-            int tw;
-
-            if (len > 40) {
-                memcpy(url_display, qr_data, 37);
-                url_display[37] = '.';
-                url_display[38] = '.';
-                url_display[39] = '.';
-                url_display[40] = '\0';
-            } else {
-                strncpy(url_display, qr_data, sizeof(url_display) - 1);
-                url_display[sizeof(url_display) - 1] = '\0';
+        for (r = 0; r < qr_size; r++) {
+            for (c = 0; c < qr_size; c++) {
+                int idx = r * qr_size + c;
+                if (qr_modules[idx] == '1') {
+                    SDL_Rect mod = {
+                        offset_x + quiet + c * mod_px,
+                        offset_y + quiet + r * mod_px,
+                        mod_px, mod_px
+                    };
+                    SDL_SetRenderDrawColor(renderer, black.r, black.g,
+                                           black.b, black.a);
+                    SDL_RenderFillRect(renderer, &mod);
+                }
             }
-
-            tw = render_text_width(url_font, url_display);
-            render_text(renderer, url_font, url_display,
-                        QR_CENTER_X - tw / 2, y + QR_SIZE + 12, gray);
+        }
+    } else {
+        /* Fallback: "Scan QR Code" placeholder */
+        TTF_Font *label_font = render_get_font(FONT_BOLD_20);
+        if (label_font) {
+            SDL_Color dark = {51, 51, 51, 255};
+            int tw = render_text_width(label_font, "Scan QR Code");
+            render_text(renderer, label_font, "Scan QR Code",
+                        x + (QR_SIZE - tw) / 2, y + QR_SIZE / 2 - 10, dark);
         }
     }
 }
@@ -178,14 +170,14 @@ void screen_pairing_render(SDL_Renderer *renderer,
 
     render_background(renderer, COLOR_BG_A);
 
-    render_qr_placeholder(renderer, state->qr_data);
+    render_qr_code(renderer, state->qr_size, state->qr_modules);
     render_pin_section(renderer, state->pin);
 
     /* Instruction text */
     body_font = render_get_font(FONT_REGULAR_20);
     if (body_font) {
         render_text_centered(renderer, body_font,
-            "Open the Allow2 app on your phone and enter this PIN",
+            "Scan with your phone to set up parental controls",
             450, gray);
     }
 

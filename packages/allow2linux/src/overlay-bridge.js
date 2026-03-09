@@ -1,134 +1,104 @@
 /**
  * Overlay Bridge
  *
- * Two display modes:
- *   1. Game Mode (gamescope): Opens screens via Steam's built-in browser
- *      using steam://openurl/http://localhost:PORT/screen
- *   2. Desktop Mode: Opens screens via xdg-open in the default browser
+ * Two display backends (auto-detected):
+ *   1. Game Mode (gamescope running): Steam browser via steam://openurl/
+ *      Communication: HTTP server + WebSocket (same JSON protocol)
+ *   2. Desktop Mode: SDL2 native overlay binary (allow2-lock-overlay)
+ *      Communication: Unix domain socket (newline-delimited JSON)
  *
- * Communication: HTTP server + WebSocket for real-time bidirectional messaging.
- * The web pages are served by this module and use the same JSON protocol
- * as the original SDL2 IPC.
+ * Both backends use the same JSON message protocol.
  */
 
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, execSync } from 'node:child_process';
+import { createConnection } from 'node:net';
+import { existsSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { generateQrSvg, generateQrGrid } from './qr.js';
 
-const OVERLAY_PORT = 3001;
+var OVERLAY_PORT = 3001;
+var SOCKET_PATH = '/tmp/allow2-overlay.sock';
 
 export class OverlayBridge extends EventEmitter {
 
     constructor() {
         super();
+        // Common state
+        this._currentScreen = null;
+        this._screenData = {};
+        this._mode = null; // 'steam' or 'sdl2', detected at start
+
+        // Steam browser backend (Game Mode)
         this._httpServer = null;
         this._wss = null;
         this._ws = null;
-        this._currentScreen = null;
-        this._screenData = {};
         this._lastHeartbeat = 0;
         this._heartbeatTimer = null;
         this._lastReopen = 0;
         this._reopenCount = 0;
         this._reopenTimer = null;
+
+        // SDL2 backend (Desktop Mode)
+        this._sdlProcess = null;
+        this._sdlSocket = null;
+        this._sdlBuffer = '';
+        this._sdlReconnectTimer = null;
     }
 
     // ── Lifecycle ──────────────────────────────────────────────
 
     async start() {
-        if (this._httpServer) return;
+        this._mode = _detectGameMode() ? 'steam' : 'sdl2';
+        console.log('[overlay] mode: ' + this._mode + ' (DISPLAY=' + (process.env.DISPLAY || 'unset') + ')');
 
-        var self = this;
-
-        return new Promise(function (resolve, reject) {
-            self._httpServer = createServer(function (req, res) {
-                self._handleHttp(req, res);
-            });
-
-            self._wss = new WebSocketServer({ server: self._httpServer });
-
-            self._wss.on('connection', function (ws) {
-                self._ws = ws;
-                self._lastHeartbeat = Date.now();
-                self._reopenCount = 0;
-                console.log('Overlay WebSocket connected');
-
-                // Start heartbeat monitor — detects closure faster than TCP close
-                self._startHeartbeatMonitor();
-
-                ws.on('message', function (data) {
-                    try {
-                        var msg = JSON.parse(data.toString());
-                        if (msg.event === 'heartbeat') {
-                            self._lastHeartbeat = Date.now();
-                            return;
-                        }
-                        if (msg.event === 'page-closing') {
-                            // Client is being closed — schedule immediate re-open
-                            self._scheduleReopen('beforeunload');
-                            return;
-                        }
-                        self._handleMessage(msg);
-                    } catch (_e) {
-                        console.warn('Invalid overlay WebSocket message');
-                    }
-                });
-
-                ws.on('close', function () {
-                    if (self._ws === ws) {
-                        self._ws = null;
-                        self._scheduleReopen('ws-close');
-                    }
-                });
-
-                // Send current screen state if any
-                if (self._currentScreen) {
-                    ws.send(JSON.stringify(self._screenData));
-                }
-            });
-
-            self._httpServer.listen(OVERLAY_PORT, '127.0.0.1', function () {
-                console.log('Overlay web server on http://127.0.0.1:' + OVERLAY_PORT);
-                resolve();
-            });
-
-            self._httpServer.on('error', reject);
-        });
+        if (this._mode === 'steam') {
+            await this._startSteamBackend();
+        } else {
+            await this._startSdl2Backend();
+        }
     }
 
     async stop() {
-        this._stopHeartbeatMonitor();
-        if (this._reopenTimer) {
-            clearTimeout(this._reopenTimer);
-            this._reopenTimer = null;
-        }
-        if (this._ws) {
-            this._ws.close();
-            this._ws = null;
-        }
-        if (this._wss) {
-            this._wss.close();
-            this._wss = null;
-        }
-        if (this._httpServer) {
-            this._httpServer.close();
-            this._httpServer = null;
+        if (this._mode === 'steam') {
+            this._stopSteamBackend();
+        } else {
+            this._stopSdl2Backend();
         }
         this._currentScreen = null;
+        this._screenData = {};
     }
 
     isAvailable() {
-        return this._httpServer !== null;
+        if (this._mode === 'steam') {
+            return this._httpServer !== null;
+        }
+        return this._sdlProcess !== null;
     }
 
-    // ── Screen Commands ─────────────────────────────────────────
+    // ── Screen Commands (shared interface) ────────────────────
 
     showPairingScreen(params) {
+        var qrSvg = '';
+        var qrGrid = null;
+        if (params.qrData) {
+            try {
+                qrSvg = generateQrSvg(params.qrData, 3);
+                qrGrid = generateQrGrid(params.qrData);
+            } catch (err) {
+                console.error('[overlay] QR generation failed:', err.message);
+            }
+        }
         this._showScreen('pairing', {
             screen: 'pairing',
             pin: params.pin,
             qrData: params.qrData || '',
+            qrSvg: qrSvg,
+            qrSize: qrGrid ? qrGrid.size : 0,
+            qrModules: qrGrid ? qrGrid.modules : '',
             message: params.message || '',
         });
     }
@@ -153,7 +123,7 @@ export class OverlayBridge extends EventEmitter {
     }
 
     sendPinResult(params) {
-        this._sendWs({
+        this._send({
             screen: 'pin-result',
             success: !!params.success,
             attemptsRemaining: params.attemptsRemaining || 0,
@@ -183,11 +153,11 @@ export class OverlayBridge extends EventEmitter {
     }
 
     showRequestStatus(status) {
-        this._sendWs({ screen: 'request-status', status: status });
+        this._send({ screen: 'request-status', status: status });
     }
 
     showDenied() {
-        this._sendWs({ screen: 'denied' });
+        this._send({ screen: 'denied' });
     }
 
     dismiss() {
@@ -198,122 +168,36 @@ export class OverlayBridge extends EventEmitter {
             clearTimeout(this._reopenTimer);
             this._reopenTimer = null;
         }
-        this._sendWs({ screen: 'dismiss' });
+        this._send({ screen: 'dismiss' });
     }
 
-    // ── Persistence (heartbeat + re-open) ─────────────────────
-
-    _startHeartbeatMonitor() {
-        var self = this;
-        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
-
-        this._heartbeatTimer = setInterval(function () {
-            // If we have a persistent screen but no heartbeat for 1.5s, re-open
-            if (self._currentScreen && self._currentScreen !== 'warning') {
-                var elapsed = Date.now() - self._lastHeartbeat;
-                if (elapsed > 1500 && self._ws) {
-                    console.log('Heartbeat lost (' + elapsed + 'ms), re-opening overlay');
-                    self._ws = null;
-                    self._scheduleReopen('heartbeat-timeout');
-                }
-            }
-        }, 500);
-    }
-
-    _stopHeartbeatMonitor() {
-        if (this._heartbeatTimer) {
-            clearInterval(this._heartbeatTimer);
-            this._heartbeatTimer = null;
-        }
-    }
-
-    _scheduleReopen(reason) {
-        var self = this;
-
-        // Only re-open persistent screens
-        if (!this._currentScreen || this._currentScreen === 'warning') return;
-
-        // Debounce: don't re-open if we already did within 2 seconds
-        var now = Date.now();
-        if (now - this._lastReopen < 2000) return;
-
-        // Give up after 5 rapid re-opens (user may be actively navigating)
-        if (this._reopenCount >= 5) {
-            console.log('Overlay re-open limit reached, backing off');
-            // Reset after 30 seconds
-            setTimeout(function () { self._reopenCount = 0; }, 30000);
-            return;
-        }
-
-        // Cancel any pending re-open
-        if (this._reopenTimer) clearTimeout(this._reopenTimer);
-
-        var delay = reason === 'beforeunload' ? 200 : 500;
-
-        this._reopenTimer = setTimeout(function () {
-            if (self._currentScreen && self._currentScreen !== 'warning') {
-                self._reopenCount++;
-                self._lastReopen = Date.now();
-                console.log('Re-opening ' + self._currentScreen + ' (reason: ' + reason + ', attempt: ' + self._reopenCount + ')');
-                var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + self._currentScreen;
-                self._openUrl(url);
-            }
-        }, delay);
-    }
-
-    // ── Internal ───────────────────────────────────────────────
+    // ── Unified send/show ─────────────────────────────────────
 
     _showScreen(screenName, data) {
         this._currentScreen = screenName;
         this._screenData = data;
+        this._send(data);
 
-        // Send to connected WebSocket client if any
-        this._sendWs(data);
-
-        // Open in Steam browser (Game Mode) or system browser (Desktop)
-        var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + screenName;
-        this._openUrl(url);
+        if (this._mode === 'steam') {
+            var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + screenName;
+            this._openSteamUrl(url);
+        }
+        // SDL2: binary is always running, just send the message — it shows/hides itself
     }
 
-    _sendWs(message) {
-        if (this._ws && this._ws.readyState === 1) {
-            this._ws.send(JSON.stringify(message));
+    _send(message) {
+        try {
+            if (this._mode === 'steam') {
+                this._sendWs(message);
+            } else {
+                this._sendSdl(message);
+            }
+        } catch (err) {
+            console.error('[overlay] send error:', err.message);
         }
     }
 
-    _openUrl(url) {
-        var self = this;
-        var steamUrl = 'steam://openurl/' + url;
-
-        // Primary: Steam CLI with steam://openurl/ (Game Mode)
-        console.log('[overlay] trying steam: ' + steamUrl);
-        execFile('steam', [steamUrl], { timeout: 5000 }, function (err) {
-            if (err) {
-                console.log('[overlay] steam failed: ' + (err.message || '').split('\n')[0]);
-            }
-        });
-
-        // Fallback (3s): try known browsers directly (Desktop Mode)
-        setTimeout(function () {
-            if (self._ws) return;
-            var browsers = ['firefox', 'chromium', 'google-chrome', 'xdg-open'];
-            self._tryBrowsers(browsers, 0, url);
-        }, 3000);
-    }
-
-    _tryBrowsers(browsers, index, url) {
-        var self = this;
-        if (index >= browsers.length || self._ws) return;
-
-        var browser = browsers[index];
-        console.log('[overlay] trying ' + browser + ': ' + url);
-        execFile(browser, [url], { timeout: 5000 }, function (err) {
-            if (err && !self._ws) {
-                console.log('[overlay] ' + browser + ' failed');
-                self._tryBrowsers(browsers, index + 1, url);
-            }
-        });
-    }
+    // ── Message handling (same for both backends) ─────────────
 
     _handleMessage(msg) {
         if (!msg || !msg.event) return;
@@ -340,24 +224,237 @@ export class OverlayBridge extends EventEmitter {
             case 'switch-child':
                 this.emit('switch-child');
                 break;
+            case 'ready':
+                // SDL2 overlay connected and ready
+                console.log('[overlay] SDL2 overlay ready');
+                if (this._currentScreen) {
+                    this._sendSdl(this._screenData);
+                }
+                break;
             default:
-                console.warn('Unknown overlay event:', msg.event);
+                console.warn('[overlay] unknown event:', msg.event);
         }
     }
 
-    // ── HTTP handler ───────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════
+    // STEAM BROWSER BACKEND (Game Mode)
+    // ══════════════════════════════════════════════════════════
+
+    async _startSteamBackend() {
+        if (this._httpServer) return;
+
+        var self = this;
+
+        return new Promise(function (resolve, reject) {
+            self._httpServer = createServer(function (req, res) {
+                try {
+                    self._handleHttp(req, res);
+                } catch (err) {
+                    console.error('[overlay] HTTP handler error:', err.message);
+                    try { res.writeHead(500); res.end('Internal error'); } catch (_e) { /* */ }
+                }
+            });
+
+            self._wss = new WebSocketServer({ server: self._httpServer });
+
+            self._wss.on('connection', function (ws) {
+                self._ws = ws;
+                self._lastHeartbeat = Date.now();
+                self._reopenCount = 0;
+                console.log('[overlay] WebSocket connected');
+
+                self._startHeartbeatMonitor();
+
+                ws.on('message', function (data) {
+                    try {
+                        var msg = JSON.parse(data.toString());
+                        if (msg.event === 'heartbeat') {
+                            self._lastHeartbeat = Date.now();
+                            return;
+                        }
+                        if (msg.event === 'page-closing') {
+                            self._scheduleReopen('beforeunload');
+                            return;
+                        }
+                        self._handleMessage(msg);
+                    } catch (_e) {
+                        console.warn('[overlay] invalid WebSocket message');
+                    }
+                });
+
+                ws.on('close', function () {
+                    if (self._ws === ws) {
+                        self._ws = null;
+                        self._scheduleReopen('ws-close');
+                    }
+                });
+
+                ws.on('error', function (err) {
+                    console.error('[overlay] WebSocket error:', err.message);
+                });
+
+                if (self._currentScreen) {
+                    try { ws.send(JSON.stringify(self._screenData)); } catch (_e) { /* */ }
+                }
+            });
+
+            self._wss.on('error', function (err) {
+                console.error('[overlay] WebSocketServer error:', err.message);
+            });
+
+            self._httpServer.listen(OVERLAY_PORT, '127.0.0.1', function () {
+                console.log('[overlay] web server on http://127.0.0.1:' + OVERLAY_PORT);
+                resolve();
+            });
+
+            self._httpServer.on('error', function (err) {
+                console.error('[overlay] HTTP server error:', err.message);
+                reject(err);
+            });
+        });
+    }
+
+    _stopSteamBackend() {
+        this._stopHeartbeatMonitor();
+        if (this._reopenTimer) {
+            clearTimeout(this._reopenTimer);
+            this._reopenTimer = null;
+        }
+        if (this._ws) {
+            try { this._ws.close(); } catch (_e) { /* */ }
+            this._ws = null;
+        }
+        if (this._wss) {
+            try { this._wss.close(); } catch (_e) { /* */ }
+            this._wss = null;
+        }
+        if (this._httpServer) {
+            try { this._httpServer.close(); } catch (_e) { /* */ }
+            this._httpServer = null;
+        }
+    }
+
+    _sendWs(message) {
+        try {
+            if (this._ws && this._ws.readyState === 1) {
+                this._ws.send(JSON.stringify(message));
+            }
+        } catch (err) {
+            console.error('[overlay] WebSocket send error:', err.message);
+        }
+    }
+
+    _openSteamUrl(url) {
+        var self = this;
+
+        // Verify Steam is still running before calling steam CLI
+        // (mode switch from Game→Desktop kills Steam)
+        try {
+            execSync('pgrep -x steam', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch (_e) {
+            console.log('[overlay] Steam no longer running — switching to SDL2 mode');
+            this._switchToSdl2();
+            return;
+        }
+
+        var steamUrl = 'steam://openurl/' + url;
+        console.log('[overlay] opening: ' + steamUrl);
+        try {
+            execFile('steam', [steamUrl], { timeout: 5000 }, function (err) {
+                if (err) {
+                    var msg = (err.message || '').split('\n')[0];
+                    console.log('[overlay] steam open failed: ' + msg);
+                    // If steam died mid-call, switch to SDL2
+                    if (msg.indexOf('not running') !== -1 || msg.indexOf('ENOENT') !== -1) {
+                        self._switchToSdl2();
+                    }
+                }
+            });
+        } catch (err) {
+            console.error('[overlay] execFile steam error:', err.message);
+            this._switchToSdl2();
+        }
+    }
+
+    async _switchToSdl2() {
+        if (this._mode === 'sdl2') return; // already switched
+
+        console.log('[overlay] switching from steam → sdl2');
+        this._stopSteamBackend();
+        this._mode = 'sdl2';
+        await this._startSdl2Backend();
+
+        // Re-show current screen on new backend
+        if (this._currentScreen) {
+            this._sendSdl(this._screenData);
+        }
+    }
+
+    // ── Steam: Heartbeat + re-open ───────────────────────────
+
+    _startHeartbeatMonitor() {
+        var self = this;
+        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+
+        this._heartbeatTimer = setInterval(function () {
+            if (self._currentScreen && self._currentScreen !== 'warning') {
+                var elapsed = Date.now() - self._lastHeartbeat;
+                if (elapsed > 1500 && self._ws) {
+                    console.log('[overlay] heartbeat lost (' + elapsed + 'ms), re-opening');
+                    self._ws = null;
+                    self._scheduleReopen('heartbeat-timeout');
+                }
+            }
+        }, 500);
+    }
+
+    _stopHeartbeatMonitor() {
+        if (this._heartbeatTimer) {
+            clearInterval(this._heartbeatTimer);
+            this._heartbeatTimer = null;
+        }
+    }
+
+    _scheduleReopen(reason) {
+        var self = this;
+
+        if (!this._currentScreen || this._currentScreen === 'warning') return;
+
+        var now = Date.now();
+        if (now - this._lastReopen < 2000) return;
+
+        if (this._reopenCount >= 5) {
+            console.log('[overlay] re-open limit reached, backing off');
+            setTimeout(function () { self._reopenCount = 0; }, 30000);
+            return;
+        }
+
+        if (this._reopenTimer) clearTimeout(this._reopenTimer);
+
+        var delay = reason === 'beforeunload' ? 200 : 500;
+
+        this._reopenTimer = setTimeout(function () {
+            if (self._currentScreen && self._currentScreen !== 'warning') {
+                self._reopenCount++;
+                self._lastReopen = Date.now();
+                console.log('[overlay] re-opening ' + self._currentScreen + ' (reason: ' + reason + ', attempt: ' + self._reopenCount + ')');
+                var url = 'http://127.0.0.1:' + OVERLAY_PORT + '/' + self._currentScreen;
+                self._openSteamUrl(url);
+            }
+        }, delay);
+    }
+
+    // ── Steam: HTTP handler ──────────────────────────────────
 
     _handleHttp(req, res) {
         var path = req.url.split('?')[0];
 
-        // API endpoint: get current screen data
         if (path === '/api/state') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(this._screenData || {}));
             return;
         }
 
-        // Serve overlay pages
         res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
             'Cache-Control': 'no-cache',
@@ -383,9 +480,371 @@ export class OverlayBridge extends EventEmitter {
             + '</script>'
             + '</body></html>';
     }
+
+    // ══════════════════════════════════════════════════════════
+    // SDL2 BACKEND (Desktop Mode)
+    // ══════════════════════════════════════════════════════════
+
+    async _startSdl2Backend() {
+        var self = this;
+        var binaryPath = this._findOverlayBinary();
+
+        if (!binaryPath) {
+            console.error('[overlay] SDL2 binary not found, falling back to steam backend');
+            this._mode = 'steam';
+            return this._startSteamBackend();
+        }
+
+        // Clean up stale socket
+        try {
+            if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
+        } catch (_e) { /* */ }
+
+        // Create Unix socket server for the SDL2 binary to connect to
+        var net = await import('node:net');
+        this._sdlServer = net.createServer(function (conn) {
+            console.log('[overlay] SDL2 binary connected');
+            self._sdlSocket = conn;
+            self._sdlBuffer = '';
+
+            conn.on('data', function (chunk) {
+                self._sdlBuffer += chunk.toString();
+                var lines = self._sdlBuffer.split('\n');
+                self._sdlBuffer = lines.pop(); // keep incomplete line
+                for (var i = 0; i < lines.length; i++) {
+                    if (lines[i].trim()) {
+                        try {
+                            var msg = JSON.parse(lines[i]);
+                            self._handleMessage(msg);
+                        } catch (_e) {
+                            console.warn('[overlay] invalid SDL2 message:', lines[i].substring(0, 80));
+                        }
+                    }
+                }
+            });
+
+            conn.on('close', function () {
+                console.log('[overlay] SDL2 binary disconnected');
+                self._sdlSocket = null;
+                // Restart if it died unexpectedly
+                if (self._sdlProcess) {
+                    self._scheduleRestartSdl();
+                }
+            });
+
+            conn.on('error', function (err) {
+                console.error('[overlay] SDL2 socket error:', err.message);
+            });
+
+            // Send current state if any
+            if (self._currentScreen) {
+                self._sendSdl(self._screenData);
+            }
+        });
+
+        this._sdlServer.on('error', function (err) {
+            console.error('[overlay] SDL2 server error:', err.message);
+        });
+
+        return new Promise(function (resolve) {
+            self._sdlServer.listen(SOCKET_PATH, function () {
+                console.log('[overlay] Unix socket listening at ' + SOCKET_PATH);
+                self._spawnSdl2(binaryPath);
+                resolve();
+            });
+        });
+    }
+
+    _spawnSdl2(binaryPath) {
+        var self = this;
+
+        // Build environment for SDL2 binary.
+        // systemd user services don't inherit DISPLAY/WAYLAND_DISPLAY,
+        // so we discover them from the active graphical session.
+        var sdlEnv = Object.assign({}, process.env);
+        if (!sdlEnv.DISPLAY && !sdlEnv.WAYLAND_DISPLAY) {
+            var sessionEnv = _discoverDisplayEnv();
+            if (sessionEnv.DISPLAY) sdlEnv.DISPLAY = sessionEnv.DISPLAY;
+            if (sessionEnv.WAYLAND_DISPLAY) sdlEnv.WAYLAND_DISPLAY = sessionEnv.WAYLAND_DISPLAY;
+            if (sessionEnv.XDG_RUNTIME_DIR) sdlEnv.XDG_RUNTIME_DIR = sessionEnv.XDG_RUNTIME_DIR;
+            console.log('[overlay] discovered display env: DISPLAY=' + (sdlEnv.DISPLAY || 'unset')
+                + ' WAYLAND_DISPLAY=' + (sdlEnv.WAYLAND_DISPLAY || 'unset'));
+        }
+
+        console.log('[overlay] spawning SDL2 binary: ' + binaryPath);
+        try {
+            this._sdlProcess = spawn(binaryPath, ['--socket', SOCKET_PATH], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: sdlEnv,
+            });
+
+            this._sdlProcess.stdout.on('data', function (data) {
+                var lines = data.toString().split('\n');
+                for (var i = 0; i < lines.length; i++) {
+                    if (lines[i].trim()) console.log('[sdl2] ' + lines[i].trim());
+                }
+            });
+
+            this._sdlProcess.stderr.on('data', function (data) {
+                var lines = data.toString().split('\n');
+                for (var i = 0; i < lines.length; i++) {
+                    if (lines[i].trim()) console.log('[sdl2] ' + lines[i].trim());
+                }
+            });
+
+            this._sdlProcess.on('exit', function (code, signal) {
+                console.log('[overlay] SDL2 binary exited (code=' + code + ', signal=' + signal + ')');
+                self._sdlProcess = null;
+                self._sdlSocket = null;
+            });
+
+            this._sdlProcess.on('error', function (err) {
+                console.error('[overlay] SDL2 spawn error:', err.message);
+                self._sdlProcess = null;
+            });
+        } catch (err) {
+            console.error('[overlay] failed to spawn SDL2:', err.message);
+            this._sdlProcess = null;
+        }
+    }
+
+    _scheduleRestartSdl() {
+        var self = this;
+        if (this._sdlReconnectTimer) return;
+
+        this._sdlReconnectTimer = setTimeout(function () {
+            self._sdlReconnectTimer = null;
+            if (!self._sdlProcess && self._currentScreen) {
+                var binaryPath = self._findOverlayBinary();
+                if (binaryPath) {
+                    self._spawnSdl2(binaryPath);
+                }
+            }
+        }, 2000);
+    }
+
+    _stopSdl2Backend() {
+        if (this._sdlReconnectTimer) {
+            clearTimeout(this._sdlReconnectTimer);
+            this._sdlReconnectTimer = null;
+        }
+        if (this._sdlSocket) {
+            try { this._sdlSocket.destroy(); } catch (_e) { /* */ }
+            this._sdlSocket = null;
+        }
+        if (this._sdlProcess) {
+            try { this._sdlProcess.kill('SIGTERM'); } catch (_e) { /* */ }
+            this._sdlProcess = null;
+        }
+        if (this._sdlServer) {
+            try { this._sdlServer.close(); } catch (_e) { /* */ }
+            this._sdlServer = null;
+        }
+        try {
+            if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
+        } catch (_e) { /* */ }
+    }
+
+    _sendSdl(message) {
+        try {
+            if (this._sdlSocket && !this._sdlSocket.destroyed) {
+                // Strip qrSvg from SDL2 messages — the C binary can't render SVG
+                // and the large SVG string overflows the 8KB read buffer
+                var msg = message;
+                if (msg.qrSvg) {
+                    msg = Object.assign({}, msg);
+                    delete msg.qrSvg;
+                }
+                this._sdlSocket.write(JSON.stringify(msg) + '\n');
+            }
+        } catch (err) {
+            console.error('[overlay] SDL2 send error:', err.message);
+        }
+    }
+
+    _findOverlayBinary() {
+        // Look relative to this module, then in common install paths
+        var __dirname;
+        try {
+            __dirname = dirname(fileURLToPath(import.meta.url));
+        } catch (_e) {
+            __dirname = '.';
+        }
+
+        var candidates = [
+            join(__dirname, '..', '..', 'allow2-lock-overlay', 'allow2-lock-overlay'),
+            join(__dirname, '..', '..', '..', 'packages', 'allow2-lock-overlay', 'allow2-lock-overlay'),
+            '/usr/lib/allow2/allow2-lock-overlay',
+            '/usr/local/bin/allow2-lock-overlay',
+        ];
+
+        // Also check deployed path on Steam Deck
+        var home = process.env.HOME || '';
+        if (home) {
+            candidates.push(join(home, 'allow2', 'allow2linux', 'packages', 'allow2-lock-overlay', 'allow2-lock-overlay'));
+        }
+
+        for (var i = 0; i < candidates.length; i++) {
+            if (existsSync(candidates[i])) {
+                console.log('[overlay] found SDL2 binary: ' + candidates[i]);
+                return candidates[i];
+            }
+        }
+
+        console.log('[overlay] SDL2 binary not found, checked: ' + candidates.join(', '));
+        return null;
+    }
 }
 
-// ── Embedded CSS ───────────────────────────────────────────
+// ── Mode detection ────────────────────────────────────────────
+
+function _detectGameMode() {
+    // Detect Game Mode: need BOTH gamescope AND Steam actually running.
+    // gamescope-session can linger after switching to Desktop Mode,
+    // so we must verify Steam is responsive too.
+    var checks = [];
+    var steamRunning = false;
+
+    try {
+        // Check if Steam process is running (required for steam:// URLs)
+        try {
+            execSync('pgrep -x steam', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+            steamRunning = true;
+            checks.push('steam-running');
+        } catch (_e) { /* Steam not running */ }
+
+        if (!steamRunning) {
+            console.log('[overlay] gameMode detection: Steam not running → sdl2');
+            return false;
+        }
+
+        // Check for gamescope (the Game Mode compositor)
+        var gamescopeFound = false;
+
+        try {
+            execSync('pgrep -f gamescope-session', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+            checks.push('gamescope-session');
+            gamescopeFound = true;
+        } catch (_e) { /* */ }
+
+        if (!gamescopeFound) {
+            try {
+                execSync('pgrep -x gamescope', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+                checks.push('gamescope-exact');
+                gamescopeFound = true;
+            } catch (_e) { /* */ }
+        }
+
+        if (!gamescopeFound) {
+            try {
+                var result = execSync('pgrep -af gamescope', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+                if (result && result.indexOf('pgrep') === -1) {
+                    checks.push('gamescope-partial');
+                    gamescopeFound = true;
+                }
+            } catch (_e) { /* */ }
+        }
+
+        // Also check for gamescope env vars
+        if (process.env.GAMESCOPE_WAYLAND_DISPLAY) {
+            checks.push('gamescope-wayland');
+            gamescopeFound = true;
+        }
+
+    } catch (_e) {
+        console.error('[overlay] mode detection error:', _e.message);
+    }
+
+    var gameMode = checks.length >= 2; // need steam + at least one gamescope indicator
+    console.log('[overlay] gameMode detection: checks=[' + checks.join(',') + '] → ' + gameMode);
+    return gameMode;
+}
+
+// ── Display environment discovery ────────────────────────────
+
+function _discoverDisplayEnv() {
+    var result = {};
+
+    // Try to read from the active graphical session via loginctl
+    try {
+        var sessions = execSync(
+            'loginctl list-sessions --no-legend --no-pager 2>/dev/null',
+            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+        ).trim().split('\n');
+
+        for (var i = 0; i < sessions.length; i++) {
+            var parts = sessions[i].trim().split(/\s+/);
+            var sid = parts[0];
+            if (!sid) continue;
+
+            try {
+                var stype = execSync(
+                    'loginctl show-session ' + sid + ' -p Type --value 2>/dev/null',
+                    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+                ).trim();
+
+                if (stype === 'wayland' || stype === 'x11') {
+                    // Found a graphical session — read its DISPLAY/WAYLAND_DISPLAY
+                    try {
+                        var display = execSync(
+                            'loginctl show-session ' + sid + ' -p Display --value 2>/dev/null',
+                            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+                        ).trim();
+                        if (display) result.DISPLAY = display;
+                    } catch (_e) { /* */ }
+
+                    // For Wayland sessions, try reading from the session leader's environment
+                    if (stype === 'wayland') {
+                        try {
+                            var leader = execSync(
+                                'loginctl show-session ' + sid + ' -p Leader --value 2>/dev/null',
+                                { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+                            ).trim();
+                            if (leader) {
+                                var env = execSync(
+                                    'cat /proc/' + leader + '/environ 2>/dev/null',
+                                    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 1024 * 64 }
+                                );
+                                var vars = env.split('\0');
+                                for (var v = 0; v < vars.length; v++) {
+                                    if (vars[v].indexOf('WAYLAND_DISPLAY=') === 0) {
+                                        result.WAYLAND_DISPLAY = vars[v].split('=')[1];
+                                    }
+                                    if (vars[v].indexOf('XDG_RUNTIME_DIR=') === 0) {
+                                        result.XDG_RUNTIME_DIR = vars[v].split('=')[1];
+                                    }
+                                    if (!result.DISPLAY && vars[v].indexOf('DISPLAY=') === 0) {
+                                        result.DISPLAY = vars[v].split('=')[1];
+                                    }
+                                }
+                            }
+                        } catch (_e) { /* */ }
+                    }
+
+                    break; // use first graphical session
+                }
+            } catch (_e) { /* */ }
+        }
+    } catch (_e) { /* */ }
+
+    // Fallback: try common defaults
+    if (!result.DISPLAY && !result.WAYLAND_DISPLAY) {
+        result.DISPLAY = ':0';
+    }
+    if (!result.XDG_RUNTIME_DIR) {
+        var uid;
+        try {
+            uid = execSync('id -u', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        } catch (_e) { uid = '1000'; }
+        result.XDG_RUNTIME_DIR = '/run/user/' + uid;
+    }
+
+    return result;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Embedded CSS + JS for Steam browser backend
+// ══════════════════════════════════════════════════════════════
 
 var OVERLAY_CSS = ''
     + '* { margin:0; padding:0; box-sizing:border-box; }'
@@ -426,8 +885,6 @@ var OVERLAY_CSS = ''
     + '.denied-msg { color:#fc8181; font-size:2rem; font-weight:700; }'
     + '.qr-placeholder { width:160px; height:160px; background:#2d3748; border-radius:12px;'
     + '  margin:1rem auto; display:flex; align-items:center; justify-content:center; color:#a0a0b0; }';
-
-// ── Embedded JavaScript ────────────────────────────────────
 
 var OVERLAY_JS = ''
     + '(function(){'
@@ -477,9 +934,13 @@ var OVERLAY_JS = ''
     + 'function renderPairing(){'
     + '  var pin=state.pin||"------";'
     + '  var digits=pin.split("").join(" ");'
+    + '  var qrHtml="<div class=qr-placeholder>QR</div>";'
+    + '  if(state.qrSvg){'
+    + '    qrHtml="<div style=\\"margin:1rem auto;width:200px;height:200px;background:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden\\">"+state.qrSvg+"</div>";'
+    + '  }'
     + '  app.innerHTML='
     + '    "<h1>Set Up Parental Controls</h1>"'
-    + '    +"<div class=qr-placeholder>QR Code</div>"'
+    + '    +qrHtml'
     + '    +"<p class=subtitle>"+(state.message||"Open the Allow2 app and enter this PIN")+"</p>"'
     + '    +"<div class=pin-digits>"+digits+"</div>"'
     + '    +"<p class=subtitle>PIN Code</p>";'
@@ -511,13 +972,13 @@ var OVERLAY_JS = ''
     + '  var dots="";'
     + '  for(var i=0;i<max;i++){'
     + '    dots+="<div class=\\"pin-dot"+(i<pinDigits.length?" filled":"")+"\\">"+('
-    + '      i<pinDigits.length?"●":"")+"</div>";'
+    + '      i<pinDigits.length?"\\u25CF":"")+"</div>";'
     + '  }'
     + '  var pad="";'
     + '  for(var n=1;n<=9;n++)pad+="<button class=pin-key onclick=\\"pinKey("+n+"\\">"+n+"</button>";'
     + '  pad+="<button class=pin-key onclick=\\"pinClear()\\">C</button>";'
     + '  pad+="<button class=pin-key onclick=\\"pinKey(0)\\">0</button>";'
-    + '  pad+="<button class=pin-key onclick=\\"pinBack()\\">←</button>";'
+    + '  pad+="<button class=pin-key onclick=\\"pinBack()\\">\\u2190</button>";'
     + '  app.innerHTML='
     + '    "<h1>Enter PIN</h1>"'
     + '    +"<p class=subtitle>"+name+"</p>"'
@@ -540,7 +1001,7 @@ var OVERLAY_JS = ''
     + 'window.pinBack=function(){pinDigits=pinDigits.slice(0,-1);render();};'
     + ''
     + 'function handlePinResult(msg){'
-    + '  if(msg.success){app.innerHTML="<h1>✓</h1><p class=subtitle>Verified</p>";}'
+    + '  if(msg.success){app.innerHTML="<h1>\\u2713</h1><p class=subtitle>Verified</p>";}'
     + '  else if(msg.lockedOut){app.innerHTML="<div class=denied-msg>Locked out</div>"'
     + '    +"<p class=subtitle>Try again in "+msg.lockoutSeconds+"s</p>";}'
     + '  else{app.innerHTML="<div class=denied-msg>Wrong PIN</div>"'
@@ -566,7 +1027,7 @@ var OVERLAY_JS = ''
     + '    +"<button class=btn onclick=\\"doRequest(30)\\">30 min</button>"'
     + '    +"<button class=btn onclick=\\"doRequest(60)\\">1 hour</button>"'
     + '    +"</div>"'
-    + '    +"<button class=\\"btn btn-secondary\\" onclick=\\"render()\\">← Back</button>";'
+    + '    +"<button class=\\"btn btn-secondary\\" onclick=\\"render()\\">\\u2190 Back</button>";'
     + '};'
     + ''
     + 'window.doRequest=function(mins){'
@@ -595,7 +1056,7 @@ var OVERLAY_JS = ''
     + '  app.style.textAlign="left";'
     + '  app.innerHTML='
     + '    "<div class=\\"warning-bar "+level+"\\">"'
-    + '    +"<span>"+(state.activity||"")+" — "+time+" remaining</span>"'
+    + '    +"<span>"+(state.activity||"")+" \\u2014 "+time+" remaining</span>"'
     + '    +(level!=="info"?"<button class=btn onclick=\\"doRequest(15)\\">Request More Time</button>":"")'
     + '    +"</div>";'
     + '}'
