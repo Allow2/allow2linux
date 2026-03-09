@@ -11,9 +11,9 @@ accepts@~1.3.8:
     negotiator "0.6.3"
 
 allow2@^2.0.0-alpha.1:
-  version "2.0.0-alpha.1"
-  resolved "https://registry.yarnpkg.com/allow2/-/allow2-2.0.0-alpha.1.tgz#6bc77315d92045c87749c4098cfe929bebbe5155"
-  integrity sha512-FnAXjxmuNwRILlsbKWKRhGoyR1YX9COb/L2XAtwlAQI0/FiqE0uXG+8IyWMUkMTAh3QlAsW+qSMTRbqpdEVajA==
+  version "2.0.0-alpha.2"
+  resolved "https://registry.yarnpkg.com/allow2/-/allow2-2.0.0-alpha.2.tgz#b9f6007b9258839501202367b7f5e9d6fd88b9b4"
+  integrity sha512-X9GGyI2V1jxfdT3ZsaMDblToqx5LULReQ6xEI9bTC9sia4qY3ke8gzkUhyVhS5vWSAJ+tbYBmAqMjLyNg8Ag+w==
   dependencies:
     express "^4.21.0"
 
