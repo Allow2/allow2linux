@@ -7,5 +7,5 @@ Icon=com.allow2.allow2linux
 Type=Application
 Categories=System;Utility;
 Keywords=parental;controls;screen;time;kids;family;gaming;allow2;
-NoDisplay=true
+NoDisplay=false
 X-Flatpak=com.allow2.allow2linux

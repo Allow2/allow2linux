@@ -36,8 +36,8 @@ const daemon = new DeviceDaemon({
     childResolver: resolveLinuxUser,
     gracePeriod: 5 * 60,
     pairingPort: 3000,
-    vid: 21599,
-    token: 'x9AUeUPpiweHTNCR',
+    vid: parseInt(process.env.ALLOW2_VID, 10) || 21599,
+    token: process.env.ALLOW2_TOKEN || 'x9AUeUPpiweHTNCR',
 });
 
 // --- Overlay events (from SDL2 binary) ---
@@ -132,8 +132,11 @@ overlay.on('feedback-cancel', function () {
 
 daemon.on('pairing-required', function (info) {
     console.log('Device not paired. PIN: ' + info.pin);
-    console.log('Open the Allow2 app to pair this device.');
-    // Don't auto-show overlay — wait for user to launch the app
+    // Show pairing screen in the SDL2 overlay so the user sees the PIN/QR code
+    overlay.showPairingScreen({
+        pin: info.pin,
+        pairingUrl: 'http://localhost:' + (daemon.pairingPort || 3000),
+    });
 });
 
 daemon.on('paired', function (data) {
