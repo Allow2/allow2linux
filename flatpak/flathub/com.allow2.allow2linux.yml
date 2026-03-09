@@ -100,7 +100,7 @@ modules:
     sources:
       - type: file
         url: https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
-        sha256: 94098a8e3d6ec65c5f5a9c7e8ac4c9c0e0d3a7f2f6e1a4d7c5b3e2f1a0c9d8e7
+        sha256: 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
         dest-filename: Inter.zip
 
   # ── allow2-lock-overlay (C + SDL2) ──────────────────────────
