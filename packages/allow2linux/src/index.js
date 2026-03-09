@@ -362,6 +362,9 @@ overlay.start().then(function () {
 // Start daemon independently — don't chain on overlay
 daemon.start().then(function () {
     _log('Daemon started');
+    // Auto-open the app so the user sees a window immediately.
+    // If unpaired → shows pairing screen. If paired → shows status.
+    daemon.openApp();
 }).catch(function (err) {
     _logError('Daemon failed to start: ' + (err.message || err));
     process.exit(1);

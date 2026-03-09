@@ -54,7 +54,10 @@ export class OverlayBridge extends EventEmitter {
 
     async start() {
         this._mode = _detectGameMode() ? 'steam' : 'sdl2';
-        console.log('[overlay] mode: ' + this._mode + ' (DISPLAY=' + (process.env.DISPLAY || 'unset') + ')');
+        console.log('[overlay] mode: ' + this._mode
+            + ' (DISPLAY=' + (process.env.DISPLAY || 'unset')
+            + ', WAYLAND_DISPLAY=' + (process.env.WAYLAND_DISPLAY || 'unset')
+            + ', XDG_RUNTIME_DIR=' + (process.env.XDG_RUNTIME_DIR || 'unset') + ')');
 
         if (this._mode === 'steam') {
             await this._startSteamBackend();
