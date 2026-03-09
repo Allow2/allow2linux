@@ -78,12 +78,14 @@ modules:
     buildsystem: simple
     build-commands:
       - mkdir -p /app/lib/allow2-sdk
-      - cp -r src package.json /app/lib/allow2-sdk/
-      # Install from pre-fetched offline npm cache (no internet in Flathub builds)
-      - cp npm-cache/*.tgz /app/lib/allow2-sdk/
-      - cd /app/lib/allow2-sdk && for f in *.tgz; do /app/bin/npm cache add "$f"; done
-      - cd /app/lib/allow2-sdk && /app/bin/npm install --omit=dev --no-optional --prefer-offline
-      - cd /app/lib/allow2-sdk && rm -f *.tgz
+      - cp -r src package.json package-lock.json /app/lib/allow2-sdk/
+      # Populate npm cache from pre-fetched tarballs
+      - |
+        for f in npm-cache/*.tgz; do
+          /app/bin/npm cache add "$f" 2>/dev/null || true
+        done
+      # Install fully offline — empty registry URL prevents any network access
+      - cd /app/lib/allow2-sdk && /app/bin/npm ci --omit=dev --ignore-scripts --registry=file:///dev/null
     sources:
       - type: git
         url: https://github.com/Allow2/Allow2node.git
@@ -124,16 +126,10 @@ modules:
     build-commands:
       - mkdir -p /app/lib/allow2linux
       - cp -r packages/allow2linux/src packages/allow2linux/config packages/allow2linux/systemd packages/allow2linux/package.json /app/lib/allow2linux/
-      # Rewrite the SDK dependency to point to the flatpak install location
-      - sed -i 's|"file:../../../sdk/node"|"file:../allow2-sdk"|' /app/lib/allow2linux/package.json
-      # Also remove the allow2 dep line entirely — it's already installed as a sibling module
-      # and npm install would fail trying to resolve the file: path in offline mode
-      - sed -i '/"allow2"/d' /app/lib/allow2linux/package.json
-      # Install remaining deps from pre-fetched offline npm cache
-      - cp npm-cache/*.tgz /app/lib/allow2linux/
-      - cd /app/lib/allow2linux && for f in *.tgz; do /app/bin/npm cache add "$f"; done
-      - cd /app/lib/allow2linux && /app/bin/npm install --omit=dev --no-optional --prefer-offline
-      - cd /app/lib/allow2linux && rm -f *.tgz
+      # No npm install needed — ws is extracted directly, allow2 is symlinked
+      # Install ws from pre-fetched tarball (only non-SDK npm dep, zero transitive deps)
+      - mkdir -p /app/lib/allow2linux/node_modules/ws
+      - tar xzf npm-cache/ws-8.19.0.tgz -C /app/lib/allow2linux/node_modules/ws --strip-components=1
       # Symlink the SDK so bare 'import "allow2"' resolves
       - ln -s /app/lib/allow2-sdk /app/lib/allow2linux/node_modules/allow2
       # Install the launcher script
