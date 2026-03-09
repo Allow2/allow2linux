@@ -6,7 +6,7 @@ allow2linux is a background daemon that enforces daily time quotas, allowed hour
 
 ## How it works
 
-The daemon runs as a systemd user service. It pairs with the Allow2 platform via a 6-digit PIN (parents never enter credentials on the child's device), identifies which child is using the device, then continuously enforces their configured limits.
+The daemon runs as a systemd user service. It pairs with the Allow2 platform via a 6-digit PIN or QR code (parents never enter credentials on the child's device), identifies which child is using the device, then continuously enforces their configured limits.
 
 ```
 Device boot → Child identification → Permission checks (every 30-60s)
@@ -19,35 +19,40 @@ Device boot → Child identification → Permission checks (every 30-60s)
 
 ### Key features
 
-- **Device pairing** — PIN or QR code, one-time setup
+- **Device pairing** — PIN or QR code deep link, one-time setup
 - **Child identification** — OS username mapping, or interactive "Who's playing?" selector with PIN verification
 - **Activity enforcement** — per-activity quotas (Gaming, Internet, Social, Screen Time) with stacking
 - **Progressive warnings** — 15min → 5min → 1min → 30sec → 10sec → blocked
 - **Request More Time** — children can request extra time directly from the lock screen; parents approve/deny from their phone
 - **Offline support** — cached permissions with grace period, deny-by-default when offline
-- **Steam Deck support** — works in both Game Mode and Desktop Mode
+- **Steam Deck support** — works in both Game Mode and Desktop Mode with automatic mode switching
 - **Process monitoring** — scans `/proc` to detect and classify running applications by activity type
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                   allow2linux daemon                      │
-│                  (Node.js, systemd --user)                │
-│                                                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐ │
-│  │ Allow2 SDK  │  │ Overlay      │  │ Process         │ │
-│  │ (DeviceDaemon│  │ Bridge       │  │ Classifier      │ │
-│  │  pairing,   │  │ (HTTP+WS on  │  │ (/proc scanning │ │
-│  │  checks,    │  │  localhost)   │  │  activity map)  │ │
-│  │  requests)  │  │              │  │                 │ │
-│  └──────┬──────┘  └──────┬───────┘  └────────┬────────┘ │
-│         │                │                    │          │
-│         ▼                ▼                    ▼          │
-│    Allow2 cloud     Browser overlay     SIGTERM/SIGKILL  │
-│   (api.allow2.com)  (pairing, selector,  (blocked apps)  │
-│                      lock, warnings)                     │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                    allow2linux daemon                           │
+│                   (Node.js, systemd --user)                    │
+│                                                                │
+│  ┌─────────────┐  ┌────────────────────┐  ┌────────────────┐  │
+│  │ Allow2 SDK  │  │ Overlay Bridge     │  │ Process        │  │
+│  │ (DeviceDaemon│  │                    │  │ Classifier     │  │
+│  │  pairing,   │  │  Game Mode:        │  │ (/proc scan,   │  │
+│  │  checks,    │  │   Steam browser    │  │  activity map)  │  │
+│  │  warnings,  │  │   (HTTP+WS:3001)   │  │                │  │
+│  │  requests)  │  │                    │  │                │  │
+│  │             │  │  Desktop Mode:     │  │                │  │
+│  │             │  │   SDL2 overlay     │  │                │  │
+│  │             │  │   (Unix socket)    │  │                │  │
+│  └──────┬──────┘  └────────┬───────────┘  └───────┬────────┘  │
+│         │                  │                      │           │
+│         ▼                  ▼                      ▼           │
+│    Allow2 cloud    Fullscreen overlay      SIGTERM/SIGKILL    │
+│   (api.allow2.com) (pairing, selector,     (blocked apps)    │
+│                     lock, warnings,                           │
+│                     request more time)                        │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ### Three packages
@@ -55,14 +60,25 @@ Device boot → Child identification → Permission checks (every 30-60s)
 | Package | Purpose |
 |---------|---------|
 | **allow2linux** (`packages/allow2linux/`) | The daemon — wires the SDK to Linux-specific enforcement (process control, overlay, notifications) |
-| **allow2** (SDK v2, separate repo) | The Allow2 Device SDK — pairing, permission checks, warnings, requests, offline support |
-| **allow2-lock-overlay** (`packages/allow2-lock-overlay/`) | Native C + SDL2 fullscreen overlay for lock screens and child selection (WIP) |
+| **allow2** (SDK v2, `../../../sdk/node/`) | The Allow2 Device SDK — pairing, permission checks, warnings, requests, offline support |
+| **allow2-lock-overlay** (`packages/allow2-lock-overlay/`) | Native C + SDL2 fullscreen overlay binary for lock screens, child selection, and pairing |
 
-### Overlay display
+### Overlay display — dual backend
 
-The overlay serves embedded HTML pages via a local HTTP + WebSocket server. Screens are opened in the available browser (Steam's browser in Game Mode, system browser in Desktop Mode). WebSocket provides real-time bidirectional communication for state updates and user input.
+The overlay automatically detects the display mode and uses the appropriate backend:
 
-Screens: pairing, child selector, PIN entry, lock, warning bar, request more time.
+| Mode | Backend | How it works |
+|------|---------|--------------|
+| **Game Mode** (gamescope) | Steam browser | HTTP + WebSocket server on port 3001. Opens pages via `steam steam://openurl/`. Embedded HTML/CSS/JS renders all screens. |
+| **Desktop Mode** (KDE/GNOME) | SDL2 native binary | Unix domain socket (`/tmp/allow2-overlay.sock`). Native C rendering with SDL2. Fullscreen, always-on-top, bypass window manager. |
+
+**Auto-switching**: If Steam dies mid-session (e.g., user switches from Game Mode to Desktop Mode), the daemon automatically detects this and switches to the SDL2 backend.
+
+Both backends use the same JSON message protocol. Screens: pairing (with QR code), child selector, PIN entry, lock, warning bar, request more time, denied.
+
+### QR code pairing
+
+The pairing screen displays a scannable QR code containing a universal deep link (`https://app.allow2.com/pair?pin=XXXXXX`). On iOS/Android with the Allow2 app installed, this deep links directly to the device connection screen. Without the app, it redirects to the appropriate app store. On desktop browsers, it opens the Allow2 web pairing page.
 
 ## Not Allow2Automate
 
@@ -81,6 +97,7 @@ allow2linux talks **directly to the Allow2 cloud**. It does not require a parent
 
 - Node.js 18+
 - The allow2 SDK v2 at `../../../sdk/node` (or set `SDK_ROOT`)
+- For SDL2 overlay: `gcc`, `libsdl2-dev`, `libsdl2-ttf-dev`, `libx11-dev`
 
 ### Run locally
 
@@ -90,10 +107,17 @@ npm install
 node src/index.js
 ```
 
+### Build SDL2 overlay
+
+```bash
+cd packages/allow2-lock-overlay
+make
+```
+
 ### Deploy to Steam Deck
 
 ```bash
-# Fast dev deployment over SSH (syncs source + restarts daemon)
+# Fast dev deployment over SSH (syncs source + SDK + rebuilds overlay + restarts daemon)
 ./flatpak/dev-deploy.sh
 
 # Watch mode — auto-redeploy on file changes
@@ -103,17 +127,7 @@ node src/index.js
 DECK_HOST=deck@192.168.100.2 ./flatpak/dev-deploy.sh
 ```
 
-The deploy script handles: Node.js installation on the Deck, file sync, dependency install, systemd service setup, and daemon restart.
-
-### Environment variables
-
-```bash
-ALLOW2_API_URL=https://staging-api.allow2.com  # API endpoint (default: production)
-ALLOW2_VID=12345                                # Version ID (registered at developer.allow2.com)
-ALLOW2_TOKEN=your-token-here                    # Version token
-```
-
-Place in `~/.allow2/.env` on the target device (the deploy script handles this if a `.env` file exists in the project root or `flatpak/` directory).
+The deploy script handles: Node.js installation on the Deck, file sync, dependency install, SDL2 overlay cross-compilation, systemd service setup, and daemon restart.
 
 ## Distribution (planned)
 
