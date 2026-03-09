@@ -107,7 +107,12 @@ export class OverlayBridge extends EventEmitter {
         this._showScreen('selector', {
             screen: 'selector',
             children: (children || []).map(function (c) {
-                return { id: c.id, name: c.name };
+                return {
+                    id: c.id || c.childId,
+                    name: c.name || c.firstName || 'Child',
+                    avatarPath: c.avatarPath || '',
+                    lastUsedAt: c.lastUsedAt || null,
+                };
             }),
         });
     }
@@ -150,6 +155,25 @@ export class OverlayBridge extends EventEmitter {
             remaining: params.remaining || 0,
             level: params.level || 'info',
         });
+    }
+
+    showStatusScreen(data) {
+        var message = {
+            screen: 'status',
+            family: data.family || '',
+            childName: data.childName || '',
+            childId: data.currentChildId || 0,
+            isParent: data.isParent ? 1 : 0,
+            activities: data.remaining || [],
+        };
+        this._currentScreen = 'status';
+        this._screenData = message;
+
+        if (this._mode === 'steam') {
+            this._openSteamUrl('http://127.0.0.1:' + OVERLAY_PORT + '/status');
+        } else {
+            this._sendSdl(message);
+        }
     }
 
     showRequestStatus(status) {
@@ -215,6 +239,9 @@ export class OverlayBridge extends EventEmitter {
             case 'parent-pin-entered':
                 this.emit('parent-pin-entered', { pin: msg.pin });
                 break;
+            case 'parent-pin-verified':
+                this.emit('parent-pin-verified');
+                break;
             case 'request-more-time':
                 this.emit('request-more-time', {
                     activityId: msg.activityId,
@@ -223,6 +250,12 @@ export class OverlayBridge extends EventEmitter {
                 break;
             case 'switch-child':
                 this.emit('switch-child');
+                break;
+            case 'app-opened':
+                this.emit('app-opened');
+                break;
+            case 'app-close':
+                this.emit('app-closed');
                 break;
             case 'ready':
                 // SDL2 overlay connected and ready
@@ -397,7 +430,7 @@ export class OverlayBridge extends EventEmitter {
         if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
 
         this._heartbeatTimer = setInterval(function () {
-            if (self._currentScreen && self._currentScreen !== 'warning') {
+            if (self._currentScreen && self._currentScreen !== 'warning' && self._currentScreen !== 'pairing') {
                 var elapsed = Date.now() - self._lastHeartbeat;
                 if (elapsed > 1500 && self._ws) {
                     console.log('[overlay] heartbeat lost (' + elapsed + 'ms), re-opening');
@@ -418,7 +451,7 @@ export class OverlayBridge extends EventEmitter {
     _scheduleReopen(reason) {
         var self = this;
 
-        if (!this._currentScreen || this._currentScreen === 'warning') return;
+        if (!this._currentScreen || this._currentScreen === 'warning' || this._currentScreen === 'pairing') return;
 
         var now = Date.now();
         if (now - this._lastReopen < 2000) return;
@@ -434,7 +467,7 @@ export class OverlayBridge extends EventEmitter {
         var delay = reason === 'beforeunload' ? 200 : 500;
 
         this._reopenTimer = setTimeout(function () {
-            if (self._currentScreen && self._currentScreen !== 'warning') {
+            if (self._currentScreen && self._currentScreen !== 'warning' && self._currentScreen !== 'pairing') {
                 self._reopenCount++;
                 self._lastReopen = Date.now();
                 console.log('[overlay] re-opening ' + self._currentScreen + ' (reason: ' + reason + ', attempt: ' + self._reopenCount + ')');

@@ -26,6 +26,7 @@
 #include "screen_pin.h"
 #include "screen_lock.h"
 #include "screen_warning.h"
+#include "screen_status.h"
 
 /* ---- Screen states ---- */
 
@@ -36,7 +37,8 @@ typedef enum {
     SCREEN_PIN_ENTRY,
     SCREEN_LOCK,
     SCREEN_WARNING,
-    SCREEN_DENIED
+    SCREEN_DENIED,
+    SCREEN_STATUS
 } ScreenState;
 
 /* ---- Application state ---- */
@@ -53,6 +55,7 @@ typedef struct {
     PinScreenState       pin;
     LockScreenState      lock;
     WarningScreenState   warning;
+    StatusScreenState    status;
 
     /* Denied flash */
     Uint32 denied_show_time;
@@ -62,6 +65,9 @@ typedef struct {
 
     /* Game controller */
     SDL_GameController *controller;
+
+    /* Mode: 0 = overlay (default), 1 = app (normal windowed) */
+    int app_mode;
 } AppState;
 
 static AppState state;
@@ -213,13 +219,15 @@ static void handle_message(const char *json_str) {
                 int i;
                 for (i = 0; i < arr->array_len && i < SELECTOR_MAX_CHILDREN; i++) {
                     JsonValue *child = &arr->array_items[i];
-                    const char *n, *ap;
+                    const char *n, *ap, *lu;
                     memset(&entries[count], 0, sizeof(entries[count]));
                     entries[count].id = json_get_int(child, "id", 0);
                     n = json_get_string(child, "name");
                     if (n) strncpy(entries[count].name, n, sizeof(entries[count].name) - 1);
                     ap = json_get_string(child, "avatarPath");
                     if (ap) strncpy(entries[count].avatar_path, ap, sizeof(entries[count].avatar_path) - 1);
+                    lu = json_get_string(child, "lastUsedAt");
+                    if (lu) strncpy(entries[count].last_used_at, lu, sizeof(entries[count].last_used_at) - 1);
                     count++;
                 }
             }
@@ -264,6 +272,28 @@ static void handle_message(const char *json_str) {
             screen_lock_set_request_status(&state.lock, st);
         }
     }
+    else if (strcmp(screen, "status") == 0) {
+        state.screen = SCREEN_STATUS;
+        memset(&state.status, 0, sizeof(state.status));
+        screen_status_set(&state.status,
+                          json_get_string(&msg, "family"),
+                          json_get_string(&msg, "childName"),
+                          json_get_int(&msg, "childId", 0),
+                          json_get_int(&msg, "isParent", 0));
+        /* Parse activities array */
+        {
+            const JsonValue *arr = json_get_array(&msg, "activities");
+            if (arr) {
+                int ai;
+                for (ai = 0; ai < arr->array_len && ai < STATUS_MAX_ACTIVITIES; ai++) {
+                    JsonValue *act = &arr->array_items[ai];
+                    screen_status_add_activity(&state.status,
+                        json_get_string(act, "name"),
+                        json_get_int(act, "remaining", 0));
+                }
+            }
+        }
+    }
     else if (strcmp(screen, "denied") == 0) {
         state.screen = SCREEN_DENIED;
         state.denied_show_time = SDL_GetTicks();
@@ -291,6 +321,9 @@ static void dispatch_event(SDL_Event *event, SDL_Window *window) {
     case SCREEN_WARNING:
         screen_warning_input(&state.warning, event, out_json, sizeof(out_json));
         break;
+    case SCREEN_STATUS:
+        screen_status_input(&state.status, event, out_json, sizeof(out_json));
+        break;
     default:
         break;
     }
@@ -312,11 +345,14 @@ int main(int argc, char *argv[]) {
     SDL_Event event;
     char msg_buf[4096];
     int i;
+    int app_mode = 0;  /* 0 = overlay, 1 = app (normal windowed) */
 
     /* Parse args */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             socket_path = argv[++i];
+        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            if (strcmp(argv[++i], "app") == 0) app_mode = 1;
         }
     }
 
@@ -325,6 +361,7 @@ int main(int argc, char *argv[]) {
     state.screen = SCREEN_NONE;
     state.running = 1;
     state.socket_path = socket_path;
+    state.app_mode = app_mode;
 
     /* Init SDL */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -332,11 +369,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Create fullscreen window (initially hidden).
-     * In Game Mode (gamescope/X11): use FULLSCREEN_DESKTOP for raw panel access.
-     * In Desktop Mode (Wayland/KDE): use borderless maximized window so the
-     * compositor handles display rotation (Steam Deck panel is physically portrait). */
-    {
+    /* Create window (initially hidden).
+     * App mode: normal resizable window for user-launched Allow2 app.
+     * Overlay mode:
+     *   In Game Mode (gamescope/X11): use FULLSCREEN_DESKTOP for raw panel access.
+     *   In Desktop Mode (Wayland/KDE): use borderless maximized window so the
+     *   compositor handles display rotation (Steam Deck panel is physically portrait). */
+    if (state.app_mode) {
+        Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+        window = SDL_CreateWindow("Allow2",
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            900, 600, win_flags);
+        fprintf(stderr, "[app] windowed mode 900x600\n");
+    } else {
         SDL_DisplayMode dm;
         int is_gamescope = 0;
         Uint32 win_flags;
@@ -378,8 +423,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Register as gamescope overlay (required for visibility in Game Mode) */
-    set_gamescope_overlay(window);
+    /* Register as gamescope overlay (required for visibility in Game Mode).
+     * Skip in app mode -- not an overlay, just a regular window. */
+    if (!state.app_mode) {
+        set_gamescope_overlay(window);
+    }
 
     /* Create renderer */
     renderer = SDL_CreateRenderer(
@@ -424,10 +472,19 @@ int main(int argc, char *argv[]) {
 
     /* Connect to daemon */
     if (socket_connect(socket_path) == 0) {
-        send_event("{\"event\":\"ready\"}");
+        if (state.app_mode) {
+            send_event("{\"event\":\"app-opened\"}");
+        } else {
+            send_event("{\"event\":\"ready\"}");
+        }
     }
 
     state.last_frame_time = SDL_GetTicks();
+
+    /* In app mode, window is already shown at creation */
+    if (state.app_mode) {
+        state.window_visible = 1;
+    }
 
     /* ---- Main event loop ---- */
 
@@ -438,7 +495,11 @@ int main(int argc, char *argv[]) {
         /* Reconnect if needed */
         if (!socket_is_connected()) {
             if (socket_try_reconnect(socket_path)) {
-                send_event("{\"event\":\"ready\"}");
+                if (state.app_mode) {
+                    send_event("{\"event\":\"app-opened\"}");
+                } else {
+                    send_event("{\"event\":\"ready\"}");
+                }
             }
         }
 
@@ -452,17 +513,31 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Hidden state: block on events, zero CPU */
+        /* Hidden state: block on events, zero CPU.
+         * In app mode, keep window visible but idle (waiting for daemon). */
         if (state.screen == SCREEN_NONE) {
-            hide_window(window);
+            if (!state.app_mode) {
+                hide_window(window);
+            }
 
             if (SDL_WaitEventTimeout(&event, 500)) {
-                if (event.type == SDL_QUIT) state.running = 0;
+                if (event.type == SDL_QUIT && state.app_mode) {
+                    state.running = 0;
+                }
                 if (event.type == SDL_KEYDOWN &&
                     event.key.keysym.sym == SDLK_ESCAPE) {
                     state.running = 0;
                 }
             }
+
+            /* In app mode, render an empty background while idle */
+            if (state.app_mode) {
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                SDL_RenderClear(renderer);
+                render_background(renderer, COLOR_BG_A);
+                SDL_RenderPresent(renderer);
+            }
+
             state.last_frame_time = SDL_GetTicks();
             continue;
         }
@@ -479,13 +554,20 @@ int main(int argc, char *argv[]) {
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
             case SDL_QUIT:
-                state.running = 0;
+                /* App mode: close button always exits.
+                 * Overlay mode: SDL_QUIT is blocked (no close button). */
+                if (state.app_mode) {
+                    state.running = 0;
+                }
                 break;
 
             case SDL_KEYDOWN:
-                if (event.key.keysym.sym == SDLK_ESCAPE &&
-                    state.screen != SCREEN_LOCK) {
-                    state.running = 0;
+                /* App mode: ESC always exits (even on lock screen).
+                 * Overlay mode: ESC blocked on lock screen. */
+                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                    if (state.app_mode || state.screen != SCREEN_LOCK) {
+                        state.running = 0;
+                    }
                 }
                 dispatch_event(&event, window);
                 break;
@@ -510,8 +592,13 @@ int main(int argc, char *argv[]) {
                 }
                 break;
 
+            case SDL_TEXTINPUT:
+                dispatch_event(&event, window);
+                break;
+
             case SDL_MOUSEBUTTONDOWN:
             case SDL_MOUSEMOTION:
+            case SDL_MOUSEWHEEL:
                 dispatch_event(&event, window);
                 break;
 
@@ -539,6 +626,9 @@ int main(int argc, char *argv[]) {
             break;
         case SCREEN_WARNING:
             screen_warning_render(renderer, &state.warning, dt);
+            break;
+        case SCREEN_STATUS:
+            screen_status_render(renderer, &state.status);
             break;
         case SCREEN_DENIED: {
             TTF_Font *tf = render_get_font(FONT_BOLD_36);

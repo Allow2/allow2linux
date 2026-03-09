@@ -4,9 +4,11 @@
  * allow2linux — Allow2 parental controls for Linux devices.
  *
  * Lifecycle:
- *   1. Unpaired  → show pairing PIN (overlay in Game Mode, browser in Desktop)
- *   2. Paired    → identify child (OS username match or interactive selector)
- *   3. Enforcing → check permissions, warn, block, lock
+ *   1. Unpaired  → dormant, no overlays. Wait for user to open Allow2 app.
+ *   2. Pairing   → user opened app, show QR + PIN. Dismissible.
+ *   3. Paired    → identify child (OS username match or interactive selector)
+ *   4. Enforcing → check permissions, warn, block, lock
+ *   5. Parent    → unrestricted, no enforcement
  */
 
 import { DeviceDaemon, PlaintextBackend, resolveLinuxUser } from 'allow2';
@@ -53,8 +55,8 @@ overlay.on('parent-selected', function () {
     overlay.showPinEntry({ childId: 0, childName: 'Parent', isParent: true });
 });
 
-overlay.on('parent-pin-entered', function (data) {
-    // TODO: verify parent PIN via ChildShield
+overlay.on('parent-pin-verified', function () {
+    daemon.enterParentMode();
 });
 
 overlay.on('request-more-time', function (data) {
@@ -87,6 +89,11 @@ overlay.on('request-more-time', function (data) {
     });
 });
 
+overlay.on('app-opened', function () {
+    console.log('[app] User opened Allow2 app');
+    daemon.openApp();
+});
+
 overlay.on('switch-child', function () {
     daemon.sessionTimeout();
 });
@@ -95,29 +102,56 @@ overlay.on('switch-child', function () {
 
 daemon.on('pairing-required', function (info) {
     console.log('Device not paired. PIN: ' + info.pin);
-    console.log('Pairing wizard running at: ' + info.url);
-
-    // Universal deep link — works on all platforms:
-    //   iOS/Android with Allow2 app: deep links to "connect device" screen
-    //   iOS/Android without app: redirects to App Store / Play Store
-    //   Desktop browser: opens Allow2 web app's device pairing page
-    var qrData = 'https://app.allow2.com/pair?pin=' + info.pin;
-
-    if (overlay.isAvailable()) {
-        overlay.showPairingScreen({
-            pin: info.pin,
-            qrData: qrData,
-            message: 'Scan with your phone to set up parental controls',
-        });
-    } else {
-        notifier.notify('Allow2 setup: enter PIN ' + info.pin + ' in the Allow2 app on your phone', 'info');
-    }
+    console.log('Open the Allow2 app to pair this device.');
+    // Don't auto-show overlay — wait for user to launch the app
 });
 
 daemon.on('paired', function (data) {
     console.log('Device paired! userId=' + data.userId + ', children=' + (data.children ? data.children.length : 0));
     overlay.dismiss();
     notifier.notify('Device paired with Allow2. Parental controls are now active.', 'info');
+});
+
+daemon.on('status-requested', function (data) {
+    console.log('[app] Showing status screen');
+    var isParent = daemon.isParentMode;
+
+    // Find current child name
+    var childName = '';
+    var children = data.children || [];
+    if (data.currentChildId) {
+        for (var i = 0; i < children.length; i++) {
+            var c = children[i];
+            if ((c.id || c.childId) === data.currentChildId) {
+                childName = c.name || c.firstName || '';
+                break;
+            }
+        }
+    }
+
+    // Transform remaining from { activityId: { allowed, remaining } }
+    // to [ { name, remaining } ] for the overlay
+    var activities = [];
+    if (data.remaining) {
+        var activityIds = Object.keys(data.remaining);
+        for (var j = 0; j < activityIds.length; j++) {
+            var actId = activityIds[j];
+            var info = data.remaining[actId];
+            activities.push({
+                name: classifier.getActivityName(Number(actId)),
+                remaining: info.remaining || 0,
+            });
+        }
+    }
+
+    overlay.showStatusScreen({
+        state: data.state,
+        family: '', // TODO: populate from credentials when available
+        childName: childName,
+        currentChildId: data.currentChildId,
+        remaining: activities,
+        isParent: isParent,
+    });
 });
 
 daemon.on('pairing-error', function (err) {
@@ -141,6 +175,11 @@ daemon.on('child-select-required', function (data) {
 daemon.on('child-selected', function (data) {
     overlay.dismiss();
     console.log('Child selected: ' + (data.name || 'unknown') + ' (id=' + data.childId + ')');
+});
+
+daemon.on('parent-mode', function () {
+    console.log('Parent mode — no restrictions');
+    overlay.dismiss();
 });
 
 daemon.on('session-timeout', function () {
@@ -239,10 +278,10 @@ daemon.on('offline-deny', async function () {
 
 // --- Unpaired event (HTTP 401 during enforcement) ---
 
-daemon.on('unpaired', async function () {
-    console.log('Device unpaired by server (HTTP 401). Restarting pairing flow...');
-    daemon.stop();
-    daemon.start();
+daemon.on('unpaired', function () {
+    console.log('Device unpaired by server (HTTP 401). Going dormant.');
+    overlay.dismiss();
+    // Daemon already stopped enforcement internally
 });
 
 // --- Start ---
