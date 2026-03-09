@@ -101,7 +101,7 @@ static void render_pin_section(SDL_Renderer *renderer, const char *pin)
 {
     int total_w = PIN_DIGIT_COUNT * PIN_BOX_W + (PIN_DIGIT_COUNT - 1) * PIN_BOX_GAP;
     int start_x = PIN_CENTER_X - total_w / 2;
-    int start_y = PIN_CENTER_Y - PIN_BOX_H / 2;
+    int start_y = PIN_CENTER_Y - PIN_BOX_H / 2 + 30; /* shifted down for label space */
     SDL_Color box_bg = {240, 242, 255, 255};
     SDL_Color box_border = {221, 224, 245, 255};
     SDL_Color digit_color = {51, 51, 51, 255};
@@ -113,18 +113,18 @@ static void render_pin_section(SDL_Renderer *renderer, const char *pin)
     TTF_Font *sub_font   = render_get_font(FONT_REGULAR_20);
     int i;
 
-    /* "Enter this PIN" label above digits */
+    /* "...or enter this PIN" label above digits */
     if (title_font) {
-        int tw = render_text_width(title_font, "Enter this PIN");
-        render_text(renderer, title_font, "Enter this PIN",
-                    PIN_CENTER_X - tw / 2, start_y - 50, white);
+        int tw = render_text_width(title_font, "...or enter this PIN");
+        render_text(renderer, title_font, "...or enter this PIN",
+                    PIN_CENTER_X - tw / 2, start_y - 70, white);
     }
 
     /* Subtitle */
     if (sub_font) {
         int tw = render_text_width(sub_font, "in the Allow2 app");
         render_text(renderer, sub_font, "in the Allow2 app",
-                    PIN_CENTER_X - tw / 2, start_y - 16, gray);
+                    PIN_CENTER_X - tw / 2, start_y - 32, gray);
     }
 
     /* Digit boxes */
