@@ -27,6 +27,7 @@
 #include "screen_lock.h"
 #include "screen_warning.h"
 #include "screen_status.h"
+#include "screen_feedback.h"
 
 /* ---- Screen states ---- */
 
@@ -38,7 +39,8 @@ typedef enum {
     SCREEN_LOCK,
     SCREEN_WARNING,
     SCREEN_DENIED,
-    SCREEN_STATUS
+    SCREEN_STATUS,
+    SCREEN_FEEDBACK
 } ScreenState;
 
 /* ---- Application state ---- */
@@ -56,6 +58,7 @@ typedef struct {
     LockScreenState      lock;
     WarningScreenState   warning;
     StatusScreenState    status;
+    FeedbackScreenState  feedback;
 
     /* Denied flash */
     Uint32 denied_show_time;
@@ -280,6 +283,7 @@ static void handle_message(const char *json_str) {
                           json_get_string(&msg, "childName"),
                           json_get_int(&msg, "childId", 0),
                           json_get_int(&msg, "isParent", 0));
+        state.status.can_submit_feedback = json_get_int(&msg, "canSubmitFeedback", 0);
         /* Parse activities array */
         {
             const JsonValue *arr = json_get_array(&msg, "activities");
@@ -293,6 +297,10 @@ static void handle_message(const char *json_str) {
                 }
             }
         }
+    }
+    else if (strcmp(screen, "feedback") == 0) {
+        state.screen = SCREEN_FEEDBACK;
+        screen_feedback_reset(&state.feedback);
     }
     else if (strcmp(screen, "denied") == 0) {
         state.screen = SCREEN_DENIED;
@@ -323,6 +331,9 @@ static void dispatch_event(SDL_Event *event, SDL_Window *window) {
         break;
     case SCREEN_STATUS:
         screen_status_input(&state.status, event, out_json, sizeof(out_json));
+        break;
+    case SCREEN_FEEDBACK:
+        screen_feedback_input(&state.feedback, event, out_json, sizeof(out_json));
         break;
     default:
         break;
@@ -629,6 +640,9 @@ int main(int argc, char *argv[]) {
             break;
         case SCREEN_STATUS:
             screen_status_render(renderer, &state.status);
+            break;
+        case SCREEN_FEEDBACK:
+            screen_feedback_render(renderer, &state.feedback);
             break;
         case SCREEN_DENIED: {
             TTF_Font *tf = render_get_font(FONT_BOLD_36);

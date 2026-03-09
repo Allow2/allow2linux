@@ -98,6 +98,36 @@ overlay.on('switch-child', function () {
     daemon.sessionTimeout();
 });
 
+overlay.on('report-issue', function () {
+    if (daemon.canSubmitFeedback) {
+        overlay.showFeedbackScreen();
+    }
+});
+
+overlay.on('submit-feedback', function (data) {
+    daemon.submitFeedback({
+        category: data.category,
+        message: data.message,
+        deviceContext: {
+            platform: 'linux',
+            productName: 'allow2linux',
+        },
+    }).then(function (result) {
+        console.log('[feedback] Submitted successfully');
+        // Return to status screen
+        daemon.openApp();
+    }).catch(function (err) {
+        console.error('[feedback] Submission failed:', err.message);
+        // Return to status screen anyway
+        daemon.openApp();
+    });
+});
+
+overlay.on('feedback-cancel', function () {
+    // Return to status screen
+    daemon.openApp();
+});
+
 // --- Pairing events (Step 1) ---
 
 daemon.on('pairing-required', function (info) {
@@ -151,6 +181,7 @@ daemon.on('status-requested', function (data) {
         currentChildId: data.currentChildId,
         remaining: activities,
         isParent: isParent,
+        canSubmitFeedback: daemon.canSubmitFeedback,
     });
 });
 

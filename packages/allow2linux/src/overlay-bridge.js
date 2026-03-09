@@ -165,6 +165,7 @@ export class OverlayBridge extends EventEmitter {
             childId: data.currentChildId || 0,
             isParent: data.isParent ? 1 : 0,
             activities: data.remaining || [],
+            canSubmitFeedback: data.canSubmitFeedback ? 1 : 0,
         };
         this._currentScreen = 'status';
         this._screenData = message;
@@ -174,6 +175,17 @@ export class OverlayBridge extends EventEmitter {
         } else {
             this._sendSdl(message);
         }
+    }
+
+    showFeedbackScreen() {
+        this._showScreen('feedback', {
+            screen: 'feedback',
+        });
+    }
+
+    showFeedbackConfirmation() {
+        /* Return to status screen after brief confirmation.
+         * The daemon will call openApp() which triggers status-requested. */
     }
 
     showRequestStatus(status) {
@@ -256,6 +268,18 @@ export class OverlayBridge extends EventEmitter {
                 break;
             case 'app-close':
                 this.emit('app-closed');
+                break;
+            case 'report-issue':
+                this.emit('report-issue');
+                break;
+            case 'submit-feedback':
+                this.emit('submit-feedback', {
+                    category: msg.category,
+                    message: msg.message,
+                });
+                break;
+            case 'feedback-cancel':
+                this.emit('feedback-cancel');
                 break;
             case 'ready':
                 // SDL2 overlay connected and ready

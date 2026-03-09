@@ -23,6 +23,7 @@ typedef struct {
         int remaining_seconds;
     } activities[STATUS_MAX_ACTIVITIES];
     int activity_count;
+    int can_submit_feedback;
 } StatusScreenState;
 
 /* Set the core fields of the status screen. */

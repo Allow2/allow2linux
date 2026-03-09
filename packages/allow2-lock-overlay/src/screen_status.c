@@ -19,8 +19,9 @@
 #define ACTIVITY_X    400
 #define TIME_X        780
 
-/* Hit-test rectangle for the request button */
+/* Hit-test rectangles */
 static SDL_Rect request_btn_rect;
+static SDL_Rect report_btn_rect;
 
 /* ---- Helpers ---- */
 
@@ -167,13 +168,28 @@ void screen_status_render(SDL_Renderer *renderer, StatusScreenState *state) {
                           bx, y, BTN_W, BTN_H, 1, accent);
             request_btn_rect = (SDL_Rect){bx, y, BTN_W, BTN_H};
         }
+
+        /* Report Issue button (only when feedback is available) */
+        if (state->can_submit_feedback) {
+            y += BTN_H + 12;
+            {
+                int bx = (LOGICAL_W - BTN_W) / 2;
+                render_button(renderer, "Report Issue",
+                              bx, y, BTN_W, BTN_H, 0, accent);
+                report_btn_rect = (SDL_Rect){bx, y, BTN_W, BTN_H};
+            }
+        }
     }
 
     /* Gamepad hints at bottom */
     if (hint_font) {
         const char *hint_text;
         if (!state->is_parent && state->child_id > 0) {
-            hint_text = "B: Close    A: Request More Time";
+            if (state->can_submit_feedback) {
+                hint_text = "B: Close    A: Request More Time    Y: Report Issue";
+            } else {
+                hint_text = "B: Close    A: Request More Time";
+            }
         } else {
             hint_text = "B: Close";
         }
@@ -198,6 +214,10 @@ static void write_close_event(char *out, int max_len) {
     snprintf(out, max_len, "{\"event\":\"app-close\"}");
 }
 
+static void write_report_issue_event(char *out, int max_len) {
+    snprintf(out, max_len, "{\"event\":\"report-issue\"}");
+}
+
 void screen_status_input(StatusScreenState *state, SDL_Event *event,
                          char *out_event_json, int max_len) {
     if (!state || !event || !out_event_json || max_len < 2) return;
@@ -213,6 +233,8 @@ void screen_status_input(StatusScreenState *state, SDL_Event *event,
         } else if ((key == SDLK_RETURN || key == SDLK_KP_ENTER) &&
                    !state->is_parent && state->child_id > 0) {
             write_request_event(state, out_event_json, max_len);
+        } else if (key == SDLK_r && state->can_submit_feedback) {
+            write_report_issue_event(out_event_json, max_len);
         }
     } else if (event->type == SDL_CONTROLLERBUTTONDOWN) {
         Uint8 btn = event->cbutton.button;
@@ -221,6 +243,9 @@ void screen_status_input(StatusScreenState *state, SDL_Event *event,
         } else if (btn == SDL_CONTROLLER_BUTTON_A &&
                    !state->is_parent && state->child_id > 0) {
             write_request_event(state, out_event_json, max_len);
+        } else if (btn == SDL_CONTROLLER_BUTTON_Y &&
+                   state->can_submit_feedback) {
+            write_report_issue_event(out_event_json, max_len);
         }
     } else if (event->type == SDL_MOUSEBUTTONDOWN &&
                event->button.button == SDL_BUTTON_LEFT) {
@@ -228,6 +253,10 @@ void screen_status_input(StatusScreenState *state, SDL_Event *event,
         if (!state->is_parent && state->child_id > 0 &&
             point_in_rect(mx, my, request_btn_rect)) {
             write_request_event(state, out_event_json, max_len);
+        }
+        if (state->can_submit_feedback &&
+            point_in_rect(mx, my, report_btn_rect)) {
+            write_report_issue_event(out_event_json, max_len);
         }
     }
 }
