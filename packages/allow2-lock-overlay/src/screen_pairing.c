@@ -177,8 +177,8 @@ void screen_pairing_render(SDL_Renderer *renderer,
     body_font = render_get_font(FONT_REGULAR_20);
     if (body_font) {
         render_text_centered(renderer, body_font,
-            "Scan with your phone to set up Allow2",
-            450, gray);
+            "Scan the QR code with your phone",
+            460, gray);
     }
 
     /* Pulsing waiting indicator */
