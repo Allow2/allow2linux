@@ -26,6 +26,8 @@ import { join } from 'node:path';
 // Stores PID in lock file. On check, verifies the PID belongs to an
 // allow2linux process (not just any process with a recycled PID, which
 // happens in Flatpak's PID namespace).
+// If an existing instance is found, signal it to reopen the app window
+// (SIGUSR1) instead of starting a duplicate.
 const LOCK_FILE = join(homedir(), '.allow2', 'allow2linux.lock');
 try {
     mkdirSync(join(homedir(), '.allow2'), { recursive: true });
@@ -43,7 +45,9 @@ try {
                 // Process doesn't exist or /proc not readable — stale lock
             }
             if (isOurProcess) {
-                console.error('[allow2linux] Another instance is already running (pid=' + lockPid + '). Exiting.');
+                // Signal the running instance to reopen its app window
+                console.log('[allow2linux] Signalling running instance (pid=' + lockPid + ') to open window.');
+                try { process.kill(lockPid, 'SIGUSR1'); } catch (_e) { /* */ }
                 process.exit(0);
             }
         }
@@ -206,8 +210,10 @@ daemon.on('pairing-connection-status', function (status) {
 
 daemon.on('paired', function (data) {
     console.log('Device paired! userId=' + data.userId + ', children=' + (data.children ? data.children.length : 0));
-    overlay.dismiss();
     notifier.notify('Device paired with Allow2. Parental Freedom is now active.', 'info');
+    // Transition the app window to child selection or status — don't dismiss.
+    // openApp() checks paired state and emits child-select-required or status-requested.
+    daemon.openApp();
 });
 
 daemon.on('status-requested', function (data) {
@@ -448,6 +454,12 @@ process.on('SIGINT', function () {
     daemon.stop();
     overlay.stop();
     process.exit(0);
+});
+
+// SIGUSR1 — sent by a second instance to reopen the app window
+process.on('SIGUSR1', function () {
+    _log('SIGUSR1 received — reopening app window');
+    daemon.openApp();
 });
 
 // --- Helpers ---
