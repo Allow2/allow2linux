@@ -37,17 +37,25 @@ fuser -k 3000/tcp 2>/dev/null || true
 sleep 2
 fuser -k 3000/tcp 2>/dev/null || true
 
-echo "==> Fetching latest node-sources.json from GitHub..."
-# Try both possible paths (flathub/ subdir and flatpak/ root)
-if curl -fsSL -o node-sources.json \
-    "https://raw.githubusercontent.com/Allow2/allow2linux/main/flatpak/flathub/node-sources.json" 2>/dev/null; then
-    echo "    Downloaded from flatpak/flathub/ ($(wc -c < node-sources.json) bytes)"
-elif curl -fsSL -o node-sources.json \
-    "https://raw.githubusercontent.com/Allow2/allow2linux/main/flatpak/node-sources.json" 2>/dev/null; then
-    echo "    Downloaded from flatpak/ ($(wc -c < node-sources.json) bytes)"
-else
-    echo "    WARNING: Could not fetch from GitHub, using local copy"
+echo "==> Generating node-sources.json from yarn.lock..."
+# Find the repo root (rebuild-clean.sh may be run from /tmp/flathub-test)
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+YARN_LOCK="${REPO_ROOT}/packages/allow2linux/yarn.lock"
+
+if [ ! -f "${YARN_LOCK}" ]; then
+    echo "ERROR: yarn.lock not found at ${YARN_LOCK}"
+    echo "Make sure the allow2linux repo is checked out."
+    exit 1
 fi
+
+if ! command -v flatpak-node-generator &>/dev/null; then
+    echo "Installing flatpak-node-generator..."
+    pip3 install --user flatpak-node-generator
+fi
+
+flatpak-node-generator yarn "${YARN_LOCK}" -o node-sources.json
+ENTRIES=$(grep -c '"type"' node-sources.json)
+echo "    Generated ${ENTRIES} entries from ${YARN_LOCK}"
 
 echo "==> Nuking flatpak-builder cache..."
 rm -rf .flatpak-builder/git .flatpak-builder/build .flatpak-builder/checksums

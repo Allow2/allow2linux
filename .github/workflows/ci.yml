@@ -31,20 +31,15 @@ jobs:
       - name: Build overlay binary
         run: make -C packages/allow2-lock-overlay
 
-  # ── Generate Flatpak offline sources ────────────────────────
-  # Regenerates node-sources.json from the real yarn.lock so
-  # flatpak-builder can install all deps (allow2 SDK + ws + express
-  # + all transitive) in offline mode.
+  # ── Validate Flatpak offline sources can be generated ────────
+  # Verifies that node-sources.json generates cleanly from yarn.lock.
+  # Does NOT commit — node-sources.json lives in the Flathub repo
+  # (or is generated locally by rebuild-clean.sh on the Steam Deck).
   flatpak-sources:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, build-overlay]
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -62,24 +57,19 @@ jobs:
           yarn install
           echo "==> yarn.lock updated"
 
-      - name: Generate Flatpak offline sources from real yarn.lock
+      - name: Generate and validate Flatpak offline sources
         run: |
           flatpak-node-generator yarn packages/allow2linux/yarn.lock \
-            -o flatpak/flathub/node-sources.json
-          echo "==> Generated node-sources.json with $(grep -c '"type"' flatpak/flathub/node-sources.json) entries"
+            -o node-sources.json
+          ENTRIES=$(grep -c '"type"' node-sources.json)
+          echo "==> Generated node-sources.json with ${ENTRIES} entries"
+          # Sanity check: must have allow2 SDK and ws at minimum
+          grep -q 'allow2-' node-sources.json || { echo "ERROR: allow2 SDK missing from sources"; exit 1; }
+          grep -q 'ws-' node-sources.json || { echo "ERROR: ws missing from sources"; exit 1; }
 
-      - name: Stage generated files and check for changes
-        id: changes
-        run: |
-          git add flatpak/flathub/node-sources.json packages/allow2linux/yarn.lock
-          # Clean up stale files from previous layout
-          git rm -f flatpak/node-sources.json flatpak/flathub/sdk-node-sources.json flatpak/flathub/daemon-node-sources.json 2>/dev/null || true
-          git diff --cached --quiet && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Commit updated sources
-        if: steps.changes.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "ci: regenerate Flatpak offline sources"
-          git push
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-node-sources
+          path: node-sources.json
+          retention-days: 90

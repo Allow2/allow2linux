@@ -23,6 +23,8 @@ packages/allow2-lock-overlay/build/
 flatpak/build/
 flatpak/repo/
 flatpak/*.flatpak
+# Generated at build time by flatpak-node-generator
+flatpak/**/node-sources.json
 
 # Snap build
 snap/*.snap
