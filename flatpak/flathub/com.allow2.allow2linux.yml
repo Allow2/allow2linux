@@ -101,7 +101,9 @@ modules:
     build-commands:
       - make -C packages/allow2-lock-overlay
       - install -D -m 755 packages/allow2-lock-overlay/allow2-lock-overlay /app/bin/allow2-lock-overlay
-      # Fonts are installed by the inter-font module
+      # Fonts are installed by the inter-font module; copy icon BMPs to assets
+      - install -m 644 packages/allow2-lock-overlay/assets/allow2-icon-64.bmp /app/share/allow2/assets/
+      - install -m 644 packages/allow2-lock-overlay/assets/allow2-logo-128.bmp /app/share/allow2/assets/
       - ln -s /app/share/allow2/assets /app/bin/assets
     sources:
       - type: git

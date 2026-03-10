@@ -124,4 +124,12 @@ void render_button(SDL_Renderer *renderer, const char *label,
 void render_avatar(SDL_Renderer *renderer, int childId, const char *name,
                    const char *avatarPath, int x, int y, int size);
 
+/* Get the Allow2 logo texture (loaded from BMP in assets).
+ * Returns NULL if not loaded. w/h set to texture dimensions. */
+SDL_Texture *render_get_logo(int *w, int *h);
+
+/* Get the Allow2 icon surface (for SDL_SetWindowIcon).
+ * Returns NULL if not loaded. Caller must NOT free it. */
+SDL_Surface *render_get_icon_surface(void);
+
 #endif /* RENDER_H */

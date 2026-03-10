@@ -67,32 +67,35 @@ void screen_pairing_set_connected(PairingScreenState *state, int connected)
 
 static void render_logo(SDL_Renderer *renderer)
 {
-    /* Draw a circular accent-colored logo with "A2" text */
-    SDL_Color accent = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, 255};
-    SDL_Color white = {255, 255, 255, 255};
-    TTF_Font *logo_font = render_get_font(FONT_BOLD_28);
-    int cx = LOGO_X + LOGO_SIZE / 2;
-    int cy = LOGO_Y + LOGO_SIZE / 2;
-    int r;
+    int logo_w = 0, logo_h = 0;
+    SDL_Texture *logo = render_get_logo(&logo_w, &logo_h);
 
-    /* Filled circle (approximated with concentric rects for simplicity) */
-    for (r = LOGO_SIZE / 2; r > 0; r--) {
-        /* Use parametric circle scan */
+    if (logo && logo_w > 0 && logo_h > 0) {
+        /* Render the actual Allow2 hand icon, scaled to LOGO_SIZE */
+        SDL_Rect dst = {LOGO_X, LOGO_Y, LOGO_SIZE, LOGO_SIZE};
+        SDL_RenderCopy(renderer, logo, NULL, &dst);
+    } else {
+        /* Fallback: accent-colored circle with "A2" text */
+        SDL_Color accent = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, 255};
+        SDL_Color white = {255, 255, 255, 255};
+        TTF_Font *logo_font = render_get_font(FONT_BOLD_28);
+        int cx = LOGO_X + LOGO_SIZE / 2;
+        int cy = LOGO_Y + LOGO_SIZE / 2;
+        int r = LOGO_SIZE / 2;
         int y;
+
         for (y = -r; y <= r; y++) {
             int half_w = (int)sqrt((double)(r * r - y * y));
             SDL_Rect row = {cx - half_w, cy + y, half_w * 2, 1};
             SDL_SetRenderDrawColor(renderer, accent.r, accent.g, accent.b, accent.a);
             SDL_RenderFillRect(renderer, &row);
         }
-        break; /* Only need one pass for a filled circle */
-    }
 
-    /* "A2" text centered in the circle */
-    if (logo_font) {
-        int tw = render_text_width(logo_font, "A2");
-        render_text(renderer, logo_font, "A2",
-                    cx - tw / 2, cy - 14, white);
+        if (logo_font) {
+            int tw = render_text_width(logo_font, "A2");
+            render_text(renderer, logo_font, "A2",
+                        cx - tw / 2, cy - 14, white);
+        }
     }
 }
 
@@ -113,8 +116,33 @@ static void render_title(SDL_Renderer *renderer)
     }
 }
 
+/* Draw a spinning arc (loading spinner) at center cx, cy with given radius */
+static void render_spinner(SDL_Renderer *renderer, int cx, int cy,
+                           int radius, float angle, SDL_Color color)
+{
+    /* Draw an arc spanning ~270 degrees using small filled rects */
+    int seg;
+    int num_segments = 40;  /* segments in the arc */
+    double start = (double)angle;
+    double arc_len = 4.7;   /* ~270 degrees in radians */
+    int thickness = 3;
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (seg = 0; seg < num_segments; seg++) {
+        double t = start + arc_len * (double)seg / (double)num_segments;
+        int px = cx + (int)(cos(t) * (double)radius);
+        int py = cy + (int)(sin(t) * (double)radius);
+        /* Fade alpha along the arc for a tail effect */
+        Uint8 a = (Uint8)(color.a * seg / num_segments);
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, a);
+        SDL_Rect dot = {px - thickness / 2, py - thickness / 2, thickness, thickness};
+        SDL_RenderFillRect(renderer, &dot);
+    }
+}
+
 static void render_qr_code(SDL_Renderer *renderer,
-                           int qr_size, const char *qr_modules)
+                           int qr_size, const char *qr_modules,
+                           float pulse_time)
 {
     int x = QR_CENTER_X - QR_SIZE / 2;
     int y = QR_CENTER_Y - QR_SIZE / 2;
@@ -149,25 +177,31 @@ static void render_qr_code(SDL_Renderer *renderer,
                 }
             }
         }
-    } else {
-        /* Fallback: "Scan QR Code" placeholder */
-        TTF_Font *label_font = render_get_font(FONT_BOLD_20);
-        if (label_font) {
-            SDL_Color dark = {51, 51, 51, 255};
-            int tw = render_text_width(label_font, "Scan QR Code");
-            render_text(renderer, label_font, "Scan QR Code",
-                        x + (QR_SIZE - tw) / 2, y + QR_SIZE / 2 - 10, dark);
-        }
-    }
 
-    /* "Scan with your phone" label below QR */
-    {
-        TTF_Font *sub_font = render_get_font(FONT_REGULAR_16);
-        if (sub_font) {
-            SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
-            int tw = render_text_width(sub_font, "Scan with your phone");
-            render_text(renderer, sub_font, "Scan with your phone",
-                        QR_CENTER_X - tw / 2, y + QR_SIZE + 12, gray);
+        /* "Scan with your phone" label below QR */
+        {
+            TTF_Font *sub_font = render_get_font(FONT_REGULAR_16);
+            if (sub_font) {
+                SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
+                int tw = render_text_width(sub_font, "Scan with your phone");
+                render_text(renderer, sub_font, "Scan with your phone",
+                            QR_CENTER_X - tw / 2, y + QR_SIZE + 12, gray);
+            }
+        }
+    } else {
+        /* No QR data yet — show spinning loader */
+        SDL_Color accent = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, 200};
+        render_spinner(renderer, QR_CENTER_X, QR_CENTER_Y, 30,
+                       pulse_time * 4.0f, accent);
+
+        {
+            TTF_Font *sub_font = render_get_font(FONT_REGULAR_16);
+            if (sub_font) {
+                SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
+                int tw = render_text_width(sub_font, "Loading...");
+                render_text(renderer, sub_font, "Loading...",
+                            QR_CENTER_X - tw / 2, QR_CENTER_Y + 50, gray);
+            }
         }
     }
 }
@@ -188,10 +222,10 @@ static void render_pin_section(SDL_Renderer *renderer, const char *pin)
     TTF_Font *sub_font   = render_get_font(FONT_REGULAR_20);
     int i;
 
-    /* "...or enter this PIN" label above digits */
+    /* "... enter this PIN" label above digits */
     if (title_font) {
-        int tw = render_text_width(title_font, "...or enter this PIN");
-        render_text(renderer, title_font, "...or enter this PIN",
+        int tw = render_text_width(title_font, "... enter this PIN");
+        render_text(renderer, title_font, "... enter this PIN",
                     PIN_CENTER_X - tw / 2, start_y - 70, white);
     }
 
@@ -218,13 +252,24 @@ static void render_pin_section(SDL_Renderer *renderer, const char *pin)
             SDL_RenderDrawRect(renderer, &br);
         }
 
-        if (digit_font && i < pin_len && pin[i] >= '0' && pin[i] <= '9') {
-            char ds[2] = {pin[i], '\0'};
-            int tw = render_text_width(digit_font, ds);
-            render_text(renderer, digit_font, ds,
-                        bx + (PIN_BOX_W - tw) / 2,
-                        start_y + (PIN_BOX_H - 36) / 2,
-                        digit_color);
+        if (digit_font) {
+            if (i < pin_len && pin[i] >= '0' && pin[i] <= '9') {
+                /* Real digit */
+                char ds[2] = {pin[i], '\0'};
+                int tw = render_text_width(digit_font, ds);
+                render_text(renderer, digit_font, ds,
+                            bx + (PIN_BOX_W - tw) / 2,
+                            start_y + (PIN_BOX_H - 36) / 2,
+                            digit_color);
+            } else {
+                /* No digit yet — show hyphen placeholder */
+                SDL_Color hyphen_color = {180, 180, 200, 255};
+                int tw = render_text_width(digit_font, "-");
+                render_text(renderer, digit_font, "-",
+                            bx + (PIN_BOX_W - tw) / 2,
+                            start_y + (PIN_BOX_H - 36) / 2,
+                            hyphen_color);
+            }
         }
     }
 }
@@ -278,7 +323,7 @@ void screen_pairing_render(SDL_Renderer *renderer,
     render_title(renderer);
 
     /* QR code and PIN side by side with divider */
-    render_qr_code(renderer, state->qr_size, state->qr_modules);
+    render_qr_code(renderer, state->qr_size, state->qr_modules, state->pulse_time);
     render_divider(renderer);
     render_pin_section(renderer, state->pin);
 

@@ -15,6 +15,9 @@
 
 static TTF_Font *fonts[FONT_COUNT];
 static SDL_Renderer *g_renderer = NULL;
+static SDL_Texture *g_logo_texture = NULL;
+static SDL_Surface *g_icon_surface = NULL;
+static int g_logo_w = 0, g_logo_h = 0;
 
 /* ---------- Helpers ---------- */
 
@@ -43,6 +46,8 @@ static TTF_Font *load_font(const char *path, int size) {
     if (!font) {
         fprintf(stderr, "[overlay] TTF_OpenFont(%s, %d): %s\n",
                 path, size, TTF_GetError());
+    } else {
+        TTF_SetFontHinting(font, TTF_HINTING_LIGHT);
     }
     return font;
 }
@@ -100,6 +105,39 @@ int render_init(SDL_Renderer *renderer, const char *assetsPath) {
     }
 
     fprintf(stderr, "[overlay] loaded %d/%d fonts\n", loaded, FONT_COUNT);
+
+    /* Load Allow2 logo BMP (128x128 for in-screen use) */
+    {
+        char logo_path[512];
+        snprintf(logo_path, sizeof(logo_path), "%s/allow2-logo-128.bmp", assetsPath);
+        SDL_Surface *logo_surf = SDL_LoadBMP(logo_path);
+        if (logo_surf) {
+            g_logo_texture = SDL_CreateTextureFromSurface(renderer, logo_surf);
+            if (g_logo_texture) {
+                g_logo_w = logo_surf->w;
+                g_logo_h = logo_surf->h;
+                fprintf(stderr, "[overlay] loaded logo %dx%d from %s\n",
+                        g_logo_w, g_logo_h, logo_path);
+            }
+            SDL_FreeSurface(logo_surf);
+        } else {
+            fprintf(stderr, "[overlay] logo not found: %s\n", logo_path);
+        }
+    }
+
+    /* Load Allow2 icon BMP (64x64 for window icon) */
+    {
+        char icon_path[512];
+        snprintf(icon_path, sizeof(icon_path), "%s/allow2-icon-64.bmp", assetsPath);
+        g_icon_surface = SDL_LoadBMP(icon_path);
+        if (g_icon_surface) {
+            fprintf(stderr, "[overlay] loaded icon %dx%d from %s\n",
+                    g_icon_surface->w, g_icon_surface->h, icon_path);
+        } else {
+            fprintf(stderr, "[overlay] icon not found: %s\n", icon_path);
+        }
+    }
+
     return 0;
 }
 
@@ -111,8 +149,26 @@ void render_cleanup(void) {
             fonts[i] = NULL;
         }
     }
+    if (g_logo_texture) {
+        SDL_DestroyTexture(g_logo_texture);
+        g_logo_texture = NULL;
+    }
+    if (g_icon_surface) {
+        SDL_FreeSurface(g_icon_surface);
+        g_icon_surface = NULL;
+    }
     g_renderer = NULL;
     TTF_Quit();
+}
+
+SDL_Texture *render_get_logo(int *w, int *h) {
+    if (w) *w = g_logo_w;
+    if (h) *h = g_logo_h;
+    return g_logo_texture;
+}
+
+SDL_Surface *render_get_icon_surface(void) {
+    return g_icon_surface;
 }
 
 TTF_Font *render_get_font(FontIndex idx) {

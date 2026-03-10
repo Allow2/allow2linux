@@ -459,11 +459,11 @@ int main(int argc, char *argv[]) {
      *   This prevents a fullscreen window from blocking the desktop when idle.
      *   Window will be created on first show_window() call. */
     if (state.app_mode) {
-        Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-        window = SDL_CreateWindow("Allow2",
+        Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
+        window = SDL_CreateWindow("Allow2 Parental Freedom",
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-            900, 600, win_flags);
-        fprintf(stderr, "[app] windowed mode 900x600\n");
+            LOGICAL_W, LOGICAL_H, win_flags);
+        fprintf(stderr, "[app] windowed mode %dx%d\n", LOGICAL_W, LOGICAL_H);
     } else {
         /* Overlay mode: detect display info but DON'T create window yet */
         const char *video_driver = SDL_GetCurrentVideoDriver();
@@ -520,7 +520,7 @@ int main(int argc, char *argv[]) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     }
 
-    /* Load assets (fonts, sets up logical resolution).
+    /* Load assets (fonts, logo, sets up logical resolution).
      * In overlay mode, renderer is NULL here (deferred) — init later. */
     resolve_assets_path(assets_path, sizeof(assets_path));
     if (renderer) {
@@ -529,6 +529,14 @@ int main(int argc, char *argv[]) {
                     "text won't render\n");
         }
         render_initialized = 1;
+
+        /* Set window icon from loaded BMP */
+        {
+            SDL_Surface *icon = render_get_icon_surface();
+            if (icon && window) {
+                SDL_SetWindowIcon(window, icon);
+            }
+        }
     }
 
     /* Open game controller if present */

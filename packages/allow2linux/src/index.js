@@ -18,9 +18,39 @@ import { DesktopNotifier } from './desktop-notify.js';
 import { SessionManager } from './session.js';
 import { OverlayBridge } from './overlay-bridge.js';
 import { execSync } from 'node:child_process';
-import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+// ── Single-instance lock ─────────────────────────────────────────
+const LOCK_FILE = join(homedir(), '.allow2', 'allow2linux.lock');
+try {
+    mkdirSync(join(homedir(), '.allow2'), { recursive: true });
+    // Check if another instance is running
+    if (existsSync(LOCK_FILE)) {
+        var lockPid = parseInt(readFileSync(LOCK_FILE, 'utf8').trim(), 10);
+        if (lockPid && !isNaN(lockPid)) {
+            try {
+                process.kill(lockPid, 0); // test if process exists
+                console.error('[allow2linux] Another instance is already running (pid=' + lockPid + '). Exiting.');
+                process.exit(0);
+            } catch (_e) {
+                // Stale lock file — previous instance crashed
+            }
+        }
+    }
+    writeFileSync(LOCK_FILE, String(process.pid));
+} catch (err) {
+    console.warn('[allow2linux] Could not create lock file:', err.message);
+}
+
+// Clean up lock file on exit
+function _removeLock() {
+    try { unlinkSync(LOCK_FILE); } catch (_e) { /* */ }
+}
+process.on('exit', _removeLock);
+process.on('SIGINT', function () { _removeLock(); process.exit(0); });
+process.on('SIGTERM', function () { _removeLock(); process.exit(0); });
 
 const classifier = new ProcessClassifier();
 const steam = new SteamMonitor();
@@ -128,6 +158,12 @@ overlay.on('submit-feedback', function (data) {
 overlay.on('feedback-cancel', function () {
     // Return to status screen
     daemon.openApp();
+});
+
+overlay.on('app-closed', function () {
+    // User closed the app window — stop pairing wizard if running
+    console.log('[app] Overlay closed by user');
+    daemon.closeApp();
 });
 
 // --- Pairing events (Step 1) ---
