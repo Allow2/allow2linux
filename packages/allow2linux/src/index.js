@@ -11,7 +11,7 @@
  *   5. Parent    → unrestricted, no enforcement
  */
 
-import { DeviceDaemon, PlaintextBackend, resolveLinuxUser } from 'allow2';
+import { DeviceDaemon, ChildShield, PlaintextBackend, resolveLinuxUser } from 'allow2';
 import { ProcessClassifier } from './process-classifier.js';
 import { SteamMonitor } from './steam.js';
 import { DesktopNotifier } from './desktop-notify.js';
@@ -85,23 +85,104 @@ const daemon = new DeviceDaemon({
     token: process.env.ALLOW2_TOKEN || 'x9AUeUPpiweHTNCR',
 });
 
+// --- Child PIN verification ---
+
+// ChildShield is created/updated whenever credentials change (pairing, getUpdates).
+// It handles PIN hashing, rate limiting, and lockout.
+var childShield = null;
+
+function _initChildShield(children) {
+    childShield = new ChildShield({
+        children: children || [],
+        verificationLevel: 'pin',
+    });
+}
+
+// Helper: check if a child has a PIN configured
+function _childHasPin(childId) {
+    if (!childShield) return false;
+    var children = childShield._children;
+    for (var i = 0; i < children.length; i++) {
+        var c = children[i];
+        if (Number(c.id) === Number(childId)) {
+            return !!(c.pinHash && c.pinSalt);
+        }
+    }
+    return false;
+}
+
 // --- Overlay events (from SDL2 binary) ---
 
 overlay.on('child-selected', function (data) {
-    daemon.selectChild(data.childId);
+    var childId = Number(data.childId);
+
+    // If child has no PIN, select them directly
+    if (!_childHasPin(childId)) {
+        daemon.selectChild(childId);
+        return;
+    }
+
+    // Child has a PIN — show PIN entry screen
+    var children = (daemon.credentials && daemon.credentials.children) || [];
+    var childName = '';
+    for (var i = 0; i < children.length; i++) {
+        if (Number(children[i].id) === childId) {
+            childName = children[i].name || '';
+            break;
+        }
+    }
+    overlay.showPinEntry({ childId: childId, childName: childName, isParent: false });
 });
 
 overlay.on('pin-entered', function (data) {
-    // TODO: verify PIN via ChildShield, send result back to overlay
-    // overlay.sendPinResult({ success, attemptsRemaining, lockedOut, lockoutSeconds })
+    if (!childShield) return;
+
+    var childId = Number(data.childId);
+    var success = childShield.selectChild(childId, data.pin);
+
+    if (success) {
+        overlay.sendPinResult({ success: true, attemptsRemaining: 0, lockedOut: false, lockoutSeconds: 0 });
+        // Small delay so the user sees the success tick before overlay switches
+        setTimeout(function () {
+            daemon.selectChild(childId);
+        }, 500);
+    } else {
+        // Check if locked out
+        var lockedOut = childShield._isLockedOut(childId);
+        var lockoutSeconds = lockedOut ? Math.ceil(childShield._lockoutRemaining(childId) / 1000) : 0;
+        overlay.sendPinResult({
+            success: false,
+            attemptsRemaining: Math.max(0, 5 - (childShield._getAttemptRecord(childId).failed || 0)),
+            lockedOut: lockedOut,
+            lockoutSeconds: lockoutSeconds,
+        });
+    }
 });
 
 overlay.on('parent-selected', function () {
     overlay.showPinEntry({ childId: 0, childName: 'Parent', isParent: true });
 });
 
-overlay.on('parent-pin-verified', function () {
-    daemon.enterParentMode();
+overlay.on('parent-pin-entered', function (data) {
+    if (!childShield) return;
+
+    var success = childShield.selectParent(data.pin);
+
+    if (success) {
+        overlay.sendPinResult({ success: true, attemptsRemaining: 0, lockedOut: false, lockoutSeconds: 0 });
+        setTimeout(function () {
+            daemon.enterParentMode();
+        }, 500);
+    } else {
+        var lockedOut = childShield._isLockedOut('parent');
+        var lockoutSeconds = lockedOut ? Math.ceil(childShield._lockoutRemaining('parent') / 1000) : 0;
+        overlay.sendPinResult({
+            success: false,
+            attemptsRemaining: Math.max(0, 5 - (childShield._getAttemptRecord('parent').failed || 0)),
+            lockedOut: lockedOut,
+            lockoutSeconds: lockoutSeconds,
+        });
+    }
 });
 
 overlay.on('request-more-time', function (data) {
@@ -211,9 +292,10 @@ daemon.on('pairing-connection-status', function (status) {
 daemon.on('paired', function (data) {
     console.log('Device paired! userId=' + data.userId + ', children=' + (data.children ? data.children.length : 0));
     notifier.notify('Device paired with Allow2. Parental Freedom is now active.', 'info');
+    // Initialize ChildShield with the children from pairing data
+    _initChildShield(data.children);
     // Don't call openApp() here — _onPaired() already calls _beginEnforcement()
     // which emits child-select-required or starts the check loop.
-    // Calling openApp() would race and emit status-requested before child selection.
 });
 
 daemon.on('status-requested', function (data) {
@@ -385,8 +467,15 @@ daemon.on('offline-deny', async function () {
 
 daemon.on('unpaired', function () {
     console.log('Device unpaired by server (HTTP 401). Going dormant.');
+    childShield = null;
     overlay.dismiss();
     // Daemon already stopped enforcement internally
+});
+
+daemon.on('children-updated', function (data) {
+    if (data && data.children) {
+        _initChildShield(data.children);
+    }
 });
 
 // --- Logging ---
@@ -431,10 +520,12 @@ overlay.start().then(function () {
 // Start daemon independently — don't chain on overlay
 daemon.start().then(function () {
     _log('Daemon started');
+    // If already paired, initialize ChildShield with stored children
+    if (daemon.paired && daemon.credentials && daemon.credentials.children) {
+        _initChildShield(daemon.credentials.children);
+    }
     // Auto-open the app so the user sees a window immediately.
-    // If unpaired → shows pairing screen. If paired → shows status.
-    // Note: the SDL2 binary also sends 'app-opened' when it connects,
-    // which calls openApp() again, but _startPairing()'s guard catches it.
+    // If unpaired → shows pairing screen. If paired → child selector (locked).
     daemon.openApp();
 }).catch(function (err) {
     _logError('Daemon failed to start: ' + (err.message || err));
