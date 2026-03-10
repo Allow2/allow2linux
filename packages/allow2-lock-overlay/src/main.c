@@ -781,6 +781,11 @@ int main(int argc, char *argv[]) {
         SDL_Delay(1);
     }
 
+    /* Notify daemon that the app window was closed */
+    if (state.app_mode) {
+        send_event("{\"event\":\"app-close\"}");
+    }
+
     /* Cleanup */
     socket_disconnect();
     if (render_initialized) render_cleanup();

@@ -23,6 +23,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 // ── Single-instance lock ─────────────────────────────────────────
+// Stores PID in lock file. On check, verifies the PID belongs to an
+// allow2linux process (not just any process with a recycled PID, which
+// happens in Flatpak's PID namespace).
 const LOCK_FILE = join(homedir(), '.allow2', 'allow2linux.lock');
 try {
     mkdirSync(join(homedir(), '.allow2'), { recursive: true });
@@ -30,12 +33,18 @@ try {
     if (existsSync(LOCK_FILE)) {
         var lockPid = parseInt(readFileSync(LOCK_FILE, 'utf8').trim(), 10);
         if (lockPid && !isNaN(lockPid)) {
+            var isOurProcess = false;
             try {
                 process.kill(lockPid, 0); // test if process exists
+                // PID exists — verify it's actually an allow2linux process
+                var cmdline = readFileSync('/proc/' + lockPid + '/cmdline', 'utf8');
+                isOurProcess = cmdline.indexOf('allow2linux') !== -1;
+            } catch (_e) {
+                // Process doesn't exist or /proc not readable — stale lock
+            }
+            if (isOurProcess) {
                 console.error('[allow2linux] Another instance is already running (pid=' + lockPid + '). Exiting.');
                 process.exit(0);
-            } catch (_e) {
-                // Stale lock file — previous instance crashed
             }
         }
     }

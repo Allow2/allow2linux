@@ -727,6 +727,7 @@ export class OverlayBridge extends EventEmitter {
             console.log('[overlay] app window closed by user, not restarting');
             this._currentScreen = null;
             this._screenData = {};
+            this.emit('app-closed');
             return;
         }
 
