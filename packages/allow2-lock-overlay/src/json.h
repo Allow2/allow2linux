@@ -20,7 +20,7 @@
 #define JSON_H
 
 #define JSON_MAX_KEYS 32
-#define JSON_MAX_STRING 512
+#define JSON_MAX_STRING 4200  /* Must fit QR module grid: up to 64*64 = 4096 chars */
 
 typedef enum {
     JSON_NULL = 0,

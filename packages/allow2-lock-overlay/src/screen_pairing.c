@@ -1,9 +1,9 @@
 /**
  * screen_pairing.c -- Pairing screen for allow2-lock-overlay
  *
- * Shows a QR code placeholder on the left, a 6-digit PIN in styled
- * digit boxes on the right, and a pulsing "Waiting for confirmation..."
- * indicator.
+ * Shows the Allow2 Parental Freedom branding at top, a QR code on
+ * the left, a 6-digit PIN in styled digit boxes on the right, and
+ * a pulsing "Waiting for confirmation..." indicator.
  */
 
 #include "screen_pairing.h"
@@ -13,19 +13,28 @@
 
 /* ---- Layout constants ---- */
 
-#define QR_SIZE       200
-#define QR_CENTER_X   350
-#define QR_CENTER_Y   300
+#define TITLE_Y        80
+#define SUBTITLE_Y    130
 
-#define PIN_CENTER_X  750
-#define PIN_CENTER_Y  300
+#define QR_SIZE       200
+#define QR_CENTER_X   380
+#define QR_CENTER_Y   360
+
+#define PIN_CENTER_X  780
+#define PIN_CENTER_Y  360
 #define PIN_BOX_W      56
 #define PIN_BOX_H      68
 #define PIN_BOX_GAP    10
 #define PIN_BOX_RADIUS 12
 #define PIN_DIGIT_COUNT 6
 
-#define WAIT_Y        500
+#define INSTRUCTION_Y 520
+#define WAIT_Y        580
+
+/* Logo circle dimensions */
+#define LOGO_SIZE      56
+#define LOGO_X        (LOGICAL_W / 2 - LOGO_SIZE / 2)
+#define LOGO_Y         16
 
 /* ---- Public API ---- */
 
@@ -48,6 +57,54 @@ void screen_pairing_set(PairingScreenState *state, const char *pin,
 }
 
 /* ---- Render helpers ---- */
+
+static void render_logo(SDL_Renderer *renderer)
+{
+    /* Draw a circular accent-colored logo with "A2" text */
+    SDL_Color accent = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, 255};
+    SDL_Color white = {255, 255, 255, 255};
+    TTF_Font *logo_font = render_get_font(FONT_BOLD_28);
+    int cx = LOGO_X + LOGO_SIZE / 2;
+    int cy = LOGO_Y + LOGO_SIZE / 2;
+    int r;
+
+    /* Filled circle (approximated with concentric rects for simplicity) */
+    for (r = LOGO_SIZE / 2; r > 0; r--) {
+        /* Use parametric circle scan */
+        int y;
+        for (y = -r; y <= r; y++) {
+            int half_w = (int)sqrt((double)(r * r - y * y));
+            SDL_Rect row = {cx - half_w, cy + y, half_w * 2, 1};
+            SDL_SetRenderDrawColor(renderer, accent.r, accent.g, accent.b, accent.a);
+            SDL_RenderFillRect(renderer, &row);
+        }
+        break; /* Only need one pass for a filled circle */
+    }
+
+    /* "A2" text centered in the circle */
+    if (logo_font) {
+        int tw = render_text_width(logo_font, "A2");
+        render_text(renderer, logo_font, "A2",
+                    cx - tw / 2, cy - 14, white);
+    }
+}
+
+static void render_title(SDL_Renderer *renderer)
+{
+    TTF_Font *title_font = render_get_font(FONT_BOLD_36);
+    TTF_Font *sub_font   = render_get_font(FONT_REGULAR_20);
+    SDL_Color accent = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, 255};
+    SDL_Color gray   = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
+
+    if (title_font) {
+        render_text_centered(renderer, title_font,
+            "Allow2 Parental Freedom", TITLE_Y, accent);
+    }
+    if (sub_font) {
+        render_text_centered(renderer, sub_font,
+            "Device Pairing", SUBTITLE_Y, gray);
+    }
+}
 
 static void render_qr_code(SDL_Renderer *renderer,
                            int qr_size, const char *qr_modules)
@@ -93,6 +150,17 @@ static void render_qr_code(SDL_Renderer *renderer,
             int tw = render_text_width(label_font, "Scan QR Code");
             render_text(renderer, label_font, "Scan QR Code",
                         x + (QR_SIZE - tw) / 2, y + QR_SIZE / 2 - 10, dark);
+        }
+    }
+
+    /* "Scan with your phone" label below QR */
+    {
+        TTF_Font *sub_font = render_get_font(FONT_REGULAR_16);
+        if (sub_font) {
+            SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
+            int tw = render_text_width(sub_font, "Scan with your phone");
+            render_text(renderer, sub_font, "Scan with your phone",
+                        QR_CENTER_X - tw / 2, y + QR_SIZE + 12, gray);
         }
     }
 }
@@ -154,6 +222,34 @@ static void render_pin_section(SDL_Renderer *renderer, const char *pin)
     }
 }
 
+/* ---- Divider between QR and PIN sections ---- */
+
+static void render_divider(SDL_Renderer *renderer)
+{
+    SDL_Color div_color = {COLOR_DIV_R, COLOR_DIV_G, COLOR_DIV_B, 255};
+    int cx = (QR_CENTER_X + PIN_CENTER_X) / 2;
+    int top = QR_CENTER_Y - QR_SIZE / 2 + 20;
+    int bot = QR_CENTER_Y + QR_SIZE / 2 - 20;
+    TTF_Font *or_font = render_get_font(FONT_REGULAR_16);
+    SDL_Color gray = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, 255};
+
+    /* Vertical line */
+    render_filled_rect(renderer, cx, top, 1, bot - top, div_color);
+
+    /* "or" label in the middle */
+    if (or_font) {
+        int tw = render_text_width(or_font, "or");
+        /* Background pill behind "or" to break the line */
+        {
+            SDL_Color bg = {COLOR_BG_R, COLOR_BG_G, COLOR_BG_B, 255};
+            render_filled_rect(renderer, cx - tw / 2 - 8,
+                               (top + bot) / 2 - 12, tw + 16, 24, bg);
+        }
+        render_text(renderer, or_font, "or",
+                    cx - tw / 2, (top + bot) / 2 - 8, gray);
+    }
+}
+
 /* ---- Main render ---- */
 
 void screen_pairing_render(SDL_Renderer *renderer,
@@ -170,15 +266,21 @@ void screen_pairing_render(SDL_Renderer *renderer,
 
     render_background(renderer, COLOR_BG_A);
 
+    /* Logo and title */
+    render_logo(renderer);
+    render_title(renderer);
+
+    /* QR code and PIN side by side with divider */
     render_qr_code(renderer, state->qr_size, state->qr_modules);
+    render_divider(renderer);
     render_pin_section(renderer, state->pin);
 
     /* Instruction text */
     body_font = render_get_font(FONT_REGULAR_20);
     if (body_font) {
         render_text_centered(renderer, body_font,
-            "Scan the QR code with your phone",
-            460, gray);
+            "Open the Allow2 app on your phone to pair this device",
+            INSTRUCTION_Y, gray);
     }
 
     /* Pulsing waiting indicator */

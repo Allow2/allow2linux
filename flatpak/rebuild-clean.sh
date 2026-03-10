@@ -38,30 +38,68 @@ sleep 2
 fuser -k 3000/tcp 2>/dev/null || true
 
 echo "==> Generating node-sources.json from yarn.lock..."
-# Find the repo root (rebuild-clean.sh may be run from /tmp/flathub-test)
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-YARN_LOCK="${REPO_ROOT}/packages/allow2linux/yarn.lock"
 
-if [ ! -f "${YARN_LOCK}" ]; then
-    echo "ERROR: yarn.lock not found at ${YARN_LOCK}"
-    echo "Make sure the allow2linux repo is checked out."
-    exit 1
-fi
+# Fetch the latest yarn.lock from GitHub
+curl -fsSL -o yarn.lock.tmp \
+    "https://raw.githubusercontent.com/Allow2/allow2linux/main/packages/allow2linux/yarn.lock"
+echo "    Fetched yarn.lock ($(wc -c < yarn.lock.tmp) bytes)"
 
-if ! command -v flatpak-node-generator &>/dev/null; then
-    echo "Installing flatpak-node-generator..."
-    pip3 install --user flatpak-node-generator
-fi
+# Generate node-sources.json directly from yarn.lock (no pip needed)
+python3 -c '
+import json, re, sys
 
-flatpak-node-generator yarn "${YARN_LOCK}" -o node-sources.json
-ENTRIES=$(grep -c '"type"' node-sources.json)
-echo "    Generated ${ENTRIES} entries from ${YARN_LOCK}"
+with open("yarn.lock.tmp") as f:
+    content = f.read()
+
+entries = []
+for m in re.finditer(
+    r"resolved \"(https://[^\"]+\.tgz)(?:#[^\"]*)?\"\s*\n\s*integrity (sha\d+-\S+)",
+    content
+):
+    url, integrity = m.group(1), m.group(2)
+    filename = url.rsplit("/", 1)[-1]
+    algo, b64_digest = integrity.split("-", 1)
+    # flatpak-builder expects hex, yarn.lock has base64
+    import base64
+    hex_digest = base64.b64decode(b64_digest).hex()
+    entry = {
+        "type": "file",
+        "url": url,
+        algo: hex_digest,
+        "dest": "flatpak-node/yarn-mirror",
+        "dest-filename": filename,
+    }
+    entries.append(entry)
+
+if not entries:
+    print("ERROR: no packages found in yarn.lock", file=sys.stderr)
+    sys.exit(1)
+
+with open("node-sources.json", "w") as f:
+    json.dump(entries, f, indent=2)
+    f.write("\n")
+
+print(f"    Generated {len(entries)} entries")
+'
+rm -f yarn.lock.tmp
 
 echo "==> Nuking flatpak-builder cache..."
 rm -rf .flatpak-builder/git .flatpak-builder/build .flatpak-builder/checksums
 
-echo "==> Clean build + install..."
-flatpak-builder --user --force-clean --install build "${MANIFEST}"
+echo "==> Building and exporting to local repo..."
+flatpak-builder --user --repo=repo --force-clean build "${MANIFEST}"
+
+echo "==> Updating repo appstream metadata..."
+flatpak build-update-repo repo
+
+echo "==> Registering local dev remote..."
+flatpak remote-add --user --no-gpg-verify --if-not-exists allow2-dev repo
+
+echo "==> Installing from local repo..."
+flatpak install --user --reinstall --noninteractive allow2-dev "${APP_ID}"
+
+echo "==> Refreshing Discover appstream cache..."
+flatpak update --user --appstream || true
 
 echo "==> Done. Launch from Discover or run:"
 echo "    flatpak run ${APP_ID}"

@@ -131,6 +131,7 @@ modules:
       - install -D -m 644 data/com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop
       - install -D -m 644 data/com.allow2.allow2linux.metainfo.xml /app/share/metainfo/com.allow2.allow2linux.metainfo.xml
       - install -D -m 644 data/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg /app/share/icons/hicolor/scalable/apps/com.allow2.allow2linux.svg
+      - install -D -m 644 data/icons/hicolor/64x64/apps/com.allow2.allow2linux.png /app/share/icons/hicolor/64x64/apps/com.allow2.allow2linux.png
       - install -D -m 644 data/icons/hicolor/128x128/apps/com.allow2.allow2linux.png /app/share/icons/hicolor/128x128/apps/com.allow2.allow2linux.png
       - install -D -m 644 data/icons/hicolor/256x256/apps/com.allow2.allow2linux.png /app/share/icons/hicolor/256x256/apps/com.allow2.allow2linux.png
     sources:
