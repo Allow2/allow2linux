@@ -232,9 +232,12 @@ export class OverlayBridge extends EventEmitter {
         } else {
             // Desktop Mode: non-blocking screens use windowed app mode,
             // blocking screens (lock, warning) use fullscreen overlay mode.
-            var wantAppMode = (screenName === 'pairing' || screenName === 'selector'
-                || screenName === 'status' || screenName === 'feedback'
-                || screenName === 'pin');
+            // App mode = dismissible window (user opened the app voluntarily).
+            // Overlay mode = fullscreen non-dismissible (device is locked).
+            // selector and pin are lock screens — device can't be used until
+            // a child identifies themselves.
+            var wantAppMode = (screenName === 'pairing'
+                || screenName === 'status' || screenName === 'feedback');
             var needsRespawn = this._sdlProcess && (wantAppMode !== this._sdlAppMode);
 
             if (needsRespawn) {

@@ -211,9 +211,9 @@ daemon.on('pairing-connection-status', function (status) {
 daemon.on('paired', function (data) {
     console.log('Device paired! userId=' + data.userId + ', children=' + (data.children ? data.children.length : 0));
     notifier.notify('Device paired with Allow2. Parental Freedom is now active.', 'info');
-    // Transition the app window to child selection or status — don't dismiss.
-    // openApp() checks paired state and emits child-select-required or status-requested.
-    daemon.openApp();
+    // Don't call openApp() here — _onPaired() already calls _beginEnforcement()
+    // which emits child-select-required or starts the check loop.
+    // Calling openApp() would race and emit status-requested before child selection.
 });
 
 daemon.on('status-requested', function (data) {
