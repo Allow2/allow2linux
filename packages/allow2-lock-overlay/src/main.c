@@ -276,6 +276,12 @@ static void handle_message(const char *json_str) {
                            json_get_string(&msg, "qrData"),
                            json_get_int(&msg, "qrSize", 0),
                            json_get_string(&msg, "qrModules"));
+        state.pairing.connected = json_get_int(&msg, "connected", 1);
+    }
+    else if (strcmp(screen, "pairing-connection") == 0) {
+        /* Update only connection status without resetting pairing state */
+        screen_pairing_set_connected(&state.pairing,
+                                     json_get_int(&msg, "connected", 1));
     }
     else if (strcmp(screen, "selector") == 0) {
         state.screen = SCREEN_SELECTOR;

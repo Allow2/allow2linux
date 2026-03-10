@@ -21,6 +21,7 @@ typedef struct {
     int   qr_size;         /* QR grid dimension (e.g. 29 for version 3) */
     char  qr_modules[QR_MAX_MODULES + 1]; /* Flat '0'/'1' grid, row-major */
     float pulse_time;      /* Accumulated time for pulse animation */
+    int   connected;       /* 1 = server reachable, 0 = disconnected */
 } PairingScreenState;
 
 /* Initialize / update state from daemon JSON message fields.
@@ -29,6 +30,9 @@ typedef struct {
 void screen_pairing_set(PairingScreenState *state,
                         const char *pin, const char *qr_data,
                         int qr_size, const char *qr_modules);
+
+/* Update only the connection status (without resetting PIN/QR). */
+void screen_pairing_set_connected(PairingScreenState *state, int connected);
 
 /* Render one frame of the pairing screen.
  * dt = seconds elapsed since last frame (e.g., 0.016 for 60fps). */

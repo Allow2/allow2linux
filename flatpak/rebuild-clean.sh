@@ -83,8 +83,8 @@ print(f"    Generated {len(entries)} entries")
 '
 rm -f yarn.lock.tmp
 
-echo "==> Nuking flatpak-builder cache..."
-rm -rf .flatpak-builder/git .flatpak-builder/build .flatpak-builder/checksums
+echo "==> Nuking flatpak-builder cache (all of it)..."
+rm -rf .flatpak-builder
 
 echo "==> Building and exporting to local repo..."
 flatpak-builder --user --repo=repo --force-clean build "${MANIFEST}"

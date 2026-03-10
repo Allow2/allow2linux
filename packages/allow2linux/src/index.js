@@ -133,14 +133,30 @@ overlay.on('feedback-cancel', function () {
 // --- Pairing events (Step 1) ---
 
 daemon.on('pairing-required', function (info) {
-    console.log('Device not paired. PIN: ' + info.pin);
+    console.log('Device not paired. PIN: ' + info.pin + ' (connected=' + info.connected + ')');
     // Show pairing screen in the SDL2 overlay so the user sees the PIN/QR code
     // qrData is the deep link URL for the Allow2 app (or app store / website fallback)
     overlay.showPairingScreen({
         pin: info.pin,
-        qrData: info.qrUrl || ('https://app.allow2.com/pair?pin=' + info.pin),
+        qrData: info.connected ? (info.qrUrl || ('https://app.allow2.com/pair?pin=' + info.pin)) : '',
         pairingUrl: 'http://localhost:' + (info.port || 3000),
+        connected: !!info.connected,
     });
+});
+
+daemon.on('pairing-connection-status', function (status) {
+    console.log('[pairing] Connection status: connected=' + status.connected);
+    if (status.connected && status.pin) {
+        // Reconnected — refresh the pairing screen with the new PIN/QR
+        overlay.showPairingScreen({
+            pin: status.pin,
+            qrData: status.qrUrl || ('https://app.allow2.com/pair?pin=' + status.pin),
+            connected: true,
+        });
+    } else {
+        // Send connection-lost state to overlay
+        overlay.updatePairingConnection(!!status.connected);
+    }
 });
 
 daemon.on('paired', function (data) {

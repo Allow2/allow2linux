@@ -104,6 +104,14 @@ export class OverlayBridge extends EventEmitter {
             qrSize: qrGrid ? qrGrid.size : 0,
             qrModules: qrGrid ? qrGrid.modules : '',
             message: params.message || '',
+            connected: params.connected !== undefined ? (params.connected ? 1 : 0) : 1,
+        });
+    }
+
+    updatePairingConnection(connected) {
+        this._sendSdl({
+            screen: 'pairing-connection',
+            connected: connected ? 1 : 0,
         });
     }
 

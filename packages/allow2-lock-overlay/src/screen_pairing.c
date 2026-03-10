@@ -54,6 +54,13 @@ void screen_pairing_set(PairingScreenState *state, const char *pin,
         state->qr_size = qr_size;
         strncpy(state->qr_modules, qr_modules, sizeof(state->qr_modules) - 1);
     }
+    /* connected defaults to 1 here; caller should set to 0 if disconnected */
+}
+
+void screen_pairing_set_connected(PairingScreenState *state, int connected)
+{
+    if (!state) return;
+    state->connected = connected;
 }
 
 /* ---- Render helpers ---- */
@@ -283,16 +290,31 @@ void screen_pairing_render(SDL_Renderer *renderer,
             INSTRUCTION_Y, gray);
     }
 
-    /* Pulsing waiting indicator */
+    /* Pulsing status indicator */
     pulse = (float)(sin((double)state->pulse_time * 3.0) * 0.5 + 0.5);
     alpha = (int)(80 + pulse * 175);
-    {
-        SDL_Color dot = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, (Uint8)alpha};
-        render_filled_rect(renderer, LOGICAL_W / 2 - 100, WAIT_Y, 10, 10, dot);
-    }
-    if (body_font) {
-        SDL_Color txt = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, (Uint8)alpha};
-        render_text(renderer, body_font, "Waiting for confirmation...",
-                    LOGICAL_W / 2 - 82, WAIT_Y - 4, txt);
+
+    if (!state->connected) {
+        /* Disconnected: show pulsing orange "Connecting to Allow2..." */
+        {
+            SDL_Color dot = {230, 126, 34, (Uint8)alpha};
+            render_filled_rect(renderer, LOGICAL_W / 2 - 100, WAIT_Y, 10, 10, dot);
+        }
+        if (body_font) {
+            SDL_Color txt = {230, 126, 34, (Uint8)alpha};
+            render_text(renderer, body_font, "Connecting to Allow2...",
+                        LOGICAL_W / 2 - 82, WAIT_Y - 4, txt);
+        }
+    } else {
+        /* Connected: show pulsing accent "Waiting for confirmation..." */
+        {
+            SDL_Color dot = {COLOR_ACCENT_R, COLOR_ACCENT_G, COLOR_ACCENT_B, (Uint8)alpha};
+            render_filled_rect(renderer, LOGICAL_W / 2 - 100, WAIT_Y, 10, 10, dot);
+        }
+        if (body_font) {
+            SDL_Color txt = {COLOR_TEXT2_R, COLOR_TEXT2_G, COLOR_TEXT2_B, (Uint8)alpha};
+            render_text(renderer, body_font, "Waiting for confirmation...",
+                        LOGICAL_W / 2 - 82, WAIT_Y - 4, txt);
+        }
     }
 }
