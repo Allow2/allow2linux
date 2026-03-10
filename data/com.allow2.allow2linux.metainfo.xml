@@ -89,24 +89,14 @@
     </release>
   </releases>
 
-  <!-- TODO: Add screenshots before Flathub submission
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/lock-screen.png</image>
-      <caption>Lock screen with Request More Time button</caption>
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/pairing-screen.png</image>
+      <caption>Device pairing with QR code and PIN on Steam Deck</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/child-selector.png</image>
-      <caption>Child selector — who's playing?</caption>
-    </screenshot>
-    <screenshot>
-      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/warning.png</image>
-      <caption>Progressive warning countdown</caption>
-    </screenshot>
-    <screenshot>
-      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/pairing.png</image>
-      <caption>Device pairing with QR code and PIN</caption>
+      <image>https://raw.githubusercontent.com/Allow2/allow2linux/main/data/screenshots/pairing-connected.png</image>
+      <caption>Pairing screen connected and waiting for confirmation</caption>
     </screenshot>
   </screenshots>
-  -->
 </component>
