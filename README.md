@@ -1,6 +1,6 @@
 # allow2linux
 
-Parental controls for Linux devices, powered by the [Allow2](https://allow2.com) platform.
+Parental Freedom for Linux devices, powered by the [Allow2](https://allow2.com) platform.
 
 allow2linux is a background daemon that enforces daily time quotas, allowed hours, activity-specific limits, and offline-safe approval workflows on any Linux device — Steam Deck, desktops, laptops, shared family PCs. Parents manage everything from the Allow2 app on their phone.
 
@@ -79,6 +79,12 @@ Both backends use the same JSON message protocol. Screens: pairing (with QR code
 ### QR code pairing
 
 The pairing screen displays a scannable QR code containing a universal deep link (`https://app.allow2.com/pair?pin=XXXXXX`). On iOS/Android with the Allow2 app installed, this deep links directly to the device connection screen. Without the app, it redirects to the appropriate app store. On desktop browsers, it opens the Allow2 web pairing page.
+
+## Screenshots
+
+| Pairing screen | Connected & waiting |
+|:-:|:-:|
+| ![Pairing screen with QR code and PIN](data/screenshots/pairing-screen.png) | ![Pairing connected and waiting for confirmation](data/screenshots/pairing-connected.png) |
 
 ## Not Allow2Automate
 
