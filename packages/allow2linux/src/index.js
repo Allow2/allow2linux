@@ -418,6 +418,8 @@ daemon.start().then(function () {
     _log('Daemon started');
     // Auto-open the app so the user sees a window immediately.
     // If unpaired → shows pairing screen. If paired → shows status.
+    // Note: the SDL2 binary also sends 'app-opened' when it connects,
+    // which calls openApp() again, but _startPairing()'s guard catches it.
     daemon.openApp();
 }).catch(function (err) {
     _logError('Daemon failed to start: ' + (err.message || err));
