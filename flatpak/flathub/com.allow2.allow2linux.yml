@@ -127,7 +127,7 @@ modules:
       - rm -f /app/lib/allow2linux/yarn.lock
       # Install the launcher script
       - |
-        printf '#!/bin/sh\nexec /app/bin/node /app/lib/allow2linux/src/index.js "$@"\n' > /app/bin/allow2linux
+        printf '#!/bin/sh\n# PRODUCTION SAFETY: shipped build — bake production flag so the Allow2 SDK\n# ignores ALLOW2_ENV / ALLOW2_API_URL and can never attach to staging.\nexport ALLOW2_PRODUCTION=1\nexport NODE_ENV=production\nexec /app/bin/node /app/lib/allow2linux/src/index.js "$@"\n' > /app/bin/allow2linux
         chmod 755 /app/bin/allow2linux
       # Desktop entry, metainfo, and icon
       - install -D -m 644 data/com.allow2.allow2linux.desktop /app/share/applications/com.allow2.allow2linux.desktop

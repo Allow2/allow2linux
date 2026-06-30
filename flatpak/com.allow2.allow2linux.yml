@@ -92,4 +92,8 @@ modules:
         dest-filename: allow2linux.sh
         contents: |
           #!/bin/sh
+          # PRODUCTION SAFETY: this is a shipped build — bake the production flag so the
+          # Allow2 SDK ignores ALLOW2_ENV / ALLOW2_API_URL and can never attach to staging.
+          export ALLOW2_PRODUCTION=1
+          export NODE_ENV=production
           exec /app/bin/node /app/lib/allow2linux/src/index.js "$@"
