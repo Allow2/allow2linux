@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Allow2 Parental Freedom
+GenericName=Parental Freedom
+Comment=Smart parental freedom for Linux desktops and Steam Deck
+Exec=allow2linux
+Icon=com.allow2.allow2linux
+Type=Application
+Categories=System;Utility;
+Keywords=parental;freedom;screen;time;kids;family;gaming;allow2;steam-deck;
+NoDisplay=false

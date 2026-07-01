@@ -1,0 +1,88 @@
+name: allow2linux
+base: core22
+version: '1.0.0-alpha.1'
+summary: Allow2 Parental Freedom for Linux
+description: |
+  Activity-aware parental freedom for Linux desktops and the Steam Deck:
+  per-activity quotas, day-types, progressive warnings, request-more-time, and a
+  fullscreen SDL2 lock overlay. The Allow2 cloud is the authority; this agent
+  consumes it (production-locked endpoint).
+
+grade: devel          # 'devel' until validated on-device — do NOT release to stable yet
+license: MIT
+website: https://github.com/Allow2/allow2linux
+source-code: https://github.com/Allow2/allow2linux
+
+# ── CONFINEMENT / STORE-REVIEW CAVEAT ────────────────────────────────────────
+# A parental-control agent needs to read /proc for process classification,
+# drive login sessions (loginctl), and paint a fullscreen overlay — none of
+# which fit strict confinement cleanly. `classic` confinement gives that access
+# but is gated behind MANUAL Snap Store review (an actual human + increasingly
+# an automated/AI policy pass on the Snapcraft side). Expect:
+#   - a review request + justification for classic confinement,
+#   - scrutiny of the /proc reads, session control, and network use,
+#   - possible rejection or a request to move to strict + interfaces.
+# This is why Snap is the OPTIONAL, non-blocking channel (Flatpak is primary):
+# the release job builds the .snap but never gates a release on Store acceptance.
+confinement: classic
+
+apps:
+  allow2linux:
+    # Production-locked: bake ALLOW2_PRODUCTION=1 so the SDK guard pins to
+    # api.allow2.com (staging unreachable), matching the deb/rpm/curl launchers.
+    command: bin/allow2linux-launcher
+    daemon: simple
+    restart-condition: always
+    environment:
+      ALLOW2_PRODUCTION: "1"
+      NODE_ENV: "production"
+      ALLOW2_VID: "21599"
+      ALLOW2_TOKEN: "x9AUeUPpiweHTNCR"
+
+parts:
+  # ── C + SDL2 lock overlay ──────────────────────────────────────────────────
+  overlay:
+    plugin: make
+    source: ../packages/allow2-lock-overlay
+    build-packages:
+      - libsdl2-dev
+      - libsdl2-ttf-dev
+      - libx11-dev
+    stage-packages:
+      - libsdl2-2.0-0
+      - libsdl2-ttf-2.0-0
+      - libx11-6
+    override-build: |
+      make
+      # Install to $SNAP/lib/allow2-lock-overlay/ so the daemon's overlay-bridge
+      # finds it via its existing <daemon>/../../allow2-lock-overlay/ candidate
+      # (daemon lands at $SNAP/lib/allow2linux/src) — no daemon code change. The
+      # overlay resolves its fonts as <binary_dir>/assets.
+      install -D -m 755 allow2-lock-overlay "$SNAPCRAFT_PART_INSTALL/lib/allow2-lock-overlay/allow2-lock-overlay"
+      for a in Inter-Regular.ttf Inter-Bold.ttf allow2-logo-128.bmp allow2-icon-64.bmp; do
+        install -D -m 644 "assets/$a" "$SNAPCRAFT_PART_INSTALL/lib/allow2-lock-overlay/assets/$a"
+      done
+
+  # ── Node daemon ────────────────────────────────────────────────────────────
+  # FLAGGED (allow2 SDK resolution): same open decision as Flatpak/deb/rpm.
+  # `npm install` here fetches `allow2@^2.0.0-alpha.1` from the registry; if it
+  # is not yet published, vendor sdk/node into node_modules before snapcraft runs.
+  daemon:
+    after: [overlay]
+    plugin: npm
+    npm-include-node: true
+    npm-node-version: "20.18.0"
+    source: ../packages/allow2linux
+    organize:
+      # Land the daemon under $SNAP/lib/allow2linux (the npm plugin installs the
+      # package into the part root; move src/config into a stable location).
+      src: lib/allow2linux/src
+      config: lib/allow2linux/config
+      package.json: lib/allow2linux/package.json
+
+  # ── Launcher wrapper ───────────────────────────────────────────────────────
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      allow2linux-launcher: bin/allow2linux-launcher

@@ -1,16 +1,53 @@
 name: Release
 
+# Owns EVERYTHING on a semver tag EXCEPT the Flatpak (that belongs to
+# publish.yml → Flatpak→R2). Clean, non-overlapping division of labour:
+#
+#   publish.yml : Flatpak → R2   (staging branch → staging,  v*.*.* tag → prod)
+#   release.yml : the C overlay (x86_64 + aarch64), deb + rpm, the curl|bash
+#                 installer + per-arch overlay assets, and the GitHub Release.
+#
+# A semver tag (v*.*.*) fires BOTH workflows — the glob matches publish.yml
+# exactly — with NO Flatpak duplication here (package-flatpak was removed). AUR
+# was dropped from the Phase-3 distribution, so package-aur is gone too.
+#
+# NOTE [unverified-device]: the actual builds run on CI/Linux. Authoring env only
+# lints the YAML/scripts (bash -n / yamllint). Validate the produced artifacts on
+# a real x86_64 host + the Steam Deck.
+
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'            # semver — matches publish.yml's production trigger exactly
   workflow_dispatch:
     inputs:
       tag:
         description: 'Version tag (e.g. v1.0.0-alpha.1)'
         required: true
+      build_snap:
+        description: 'Also build the optional Snap (never gates the release)'
+        type: boolean
+        default: false
 
 jobs:
+  # ── Resolve the version once ────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "==> tag=${TAG}  version=${TAG#v}"
+
   # ── Build overlay for each arch ─────────────────────────────
   build-overlay:
     strategy:
@@ -24,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install SDL2 dev headers
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libx11-dev
       - name: Build overlay
         run: make -C packages/allow2-lock-overlay
       - uses: actions/upload-artifact@v4
@@ -32,9 +69,9 @@ jobs:
           name: overlay-${{ matrix.arch }}
           path: packages/allow2-lock-overlay/allow2-lock-overlay
 
-  # ── DEB package ─────────────────────────────────────────────
+  # ── DEB package (per-arch) ──────────────────────────────────
   package-deb:
-    needs: build-overlay
+    needs: [version, build-overlay]
     strategy:
       matrix:
         arch: [x86_64, aarch64]
@@ -44,78 +81,178 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install fpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+      - name: Configure git auth for the allow2 SDK git-ref (if private)
+        env:
+          SDK_GIT_TOKEN: ${{ secrets.SDK_GIT_TOKEN }}
+        run: |
+          if [ -n "${SDK_GIT_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${SDK_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+            echo "==> git auth configured for private SDK git-install"
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: overlay-${{ matrix.arch }}
           path: overlay/
-      - name: Build DEB
+      - name: Build .deb
         run: |
-          echo "TODO: Build .deb package for ${{ matrix.arch }}"
-          # Scripts in packaging/deb/ will handle this
-      # - uses: actions/upload-artifact@v4
-      #   with:
-      #     name: deb-${{ matrix.arch }}
-      #     path: dist/*.deb
-
-  # ── RPM package ─────────────────────────────────────────────
-  package-rpm:
-    needs: build-overlay
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build RPM
-        run: |
-          echo "TODO: Build .rpm package"
-          # Scripts in packaging/rpm/ will handle this
-
-  # ── AUR/PKGBUILD ───────────────────────────────────────────
-  package-aur:
-    needs: build-overlay
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Generate PKGBUILD
-        run: |
-          echo "TODO: Generate PKGBUILD and push to AUR"
-          # Uses packaging/arch/PKGBUILD.template
-
-  # ── Flatpak bundle ─────────────────────────────────────────
-  package-flatpak:
-    needs: build-overlay
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Flatpak tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
-          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
-      - name: Build Flatpak
-        run: |
-          cd flatpak
-          flatpak-builder --force-clean --repo=repo build-dir flathub/com.allow2.allow2linux.yml
-      - name: Bundle Flatpak
-        run: |
-          cd flatpak
-          flatpak build-bundle repo com.allow2.allow2linux.flatpak com.allow2.allow2linux
+          chmod +x overlay/allow2-lock-overlay
+          packaging/build-package.sh \
+            --format deb \
+            --arch ${{ matrix.arch }} \
+            --overlay overlay/allow2-lock-overlay \
+            --version ${{ needs.version.outputs.version }} \
+            --out dist/
       - uses: actions/upload-artifact@v4
         with:
-          name: flatpak
-          path: flatpak/*.flatpak
+          name: deb-${{ matrix.arch }}
+          path: dist/*.deb
+
+  # ── RPM package (per-arch) ──────────────────────────────────
+  package-rpm:
+    needs: [version, build-overlay]
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install fpm + rpm tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm
+          sudo gem install --no-document fpm
+      - name: Configure git auth for the allow2 SDK git-ref (if private)
+        env:
+          SDK_GIT_TOKEN: ${{ secrets.SDK_GIT_TOKEN }}
+        run: |
+          if [ -n "${SDK_GIT_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${SDK_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+            echo "==> git auth configured for private SDK git-install"
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: overlay-${{ matrix.arch }}
+          path: overlay/
+      - name: Build .rpm
+        run: |
+          chmod +x overlay/allow2-lock-overlay
+          packaging/build-package.sh \
+            --format rpm \
+            --arch ${{ matrix.arch }} \
+            --overlay overlay/allow2-lock-overlay \
+            --version ${{ needs.version.outputs.version }} \
+            --out dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: dist/*.rpm
+
+  # ── curl|bash installer assets ──────────────────────────────
+  # Publishes install.sh + a daemon tarball + per-arch overlay tarballs, which
+  # scripts/install.sh downloads from the GitHub Release's stable
+  # latest/download/ URLs (get.allow2.com/linux redirects to install.sh).
+  installer-assets:
+    needs: build-overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Configure git auth for the allow2 SDK git-ref (if private)
+        env:
+          SDK_GIT_TOKEN: ${{ secrets.SDK_GIT_TOKEN }}
+        run: |
+          if [ -n "${SDK_GIT_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${SDK_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+            echo "==> git auth configured for private SDK git-install"
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: overlay-artifacts/
+      - name: Stage + tar the daemon (production deps)
+        run: |
+          mkdir -p stage/daemon dist
+          # Copy ONLY package.json (never the stale monorepo package-lock.json).
+          cp -r packages/allow2linux/src packages/allow2linux/config \
+                packages/allow2linux/systemd packages/allow2linux/package.json stage/daemon/
+          # allow2 SDK resolves from the git-ref in package.json
+          # (github:Allow2/allow2node#v2.0.0-alpha). `npm install`, NOT `npm ci`.
+          # Needs git + network (+ token above if the SDK repo is private). The
+          # user's install.sh downloads THIS pre-built tarball, so no git/npm on
+          # the parent's machine.
+          ( cd stage/daemon && npm install --omit=dev --no-optional )
+          tar -C stage/daemon -czf dist/allow2linux-daemon.tar.gz .
+      - name: Tar per-arch overlay (binary + assets)
+        run: |
+          for arch in x86_64 aarch64; do
+            BIN="overlay-artifacts/overlay-${arch}/allow2-lock-overlay"
+            [ -f "$BIN" ] || { echo "missing overlay for ${arch}"; exit 1; }
+            mkdir -p "stage/overlay-${arch}/assets"
+            install -m 755 "$BIN" "stage/overlay-${arch}/allow2-lock-overlay"
+            cp packages/allow2-lock-overlay/assets/Inter-Regular.ttf \
+               packages/allow2-lock-overlay/assets/Inter-Bold.ttf \
+               packages/allow2-lock-overlay/assets/allow2-logo-128.bmp \
+               packages/allow2-lock-overlay/assets/allow2-icon-64.bmp \
+               "stage/overlay-${arch}/assets/"
+            tar -C "stage/overlay-${arch}" -czf "dist/allow2-lock-overlay-${arch}.tar.gz" .
+          done
+      - name: Stage install.sh
+        run: cp scripts/install.sh dist/install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-assets
+          path: dist/*
+
+  # ── Optional Snap (never gates a release) ───────────────────
+  # Runs only on a manual dispatch with build_snap=true, and is continue-on-error
+  # AND deliberately NOT in the `release` job's `needs`, so it can never block a
+  # release. See snap/snapcraft.yaml for the classic-confinement Store-review
+  # caveat (manual + AI policy pass; expect scrutiny/rejection risk).
+  package-snap:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_snap }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: snapcore/action-build@v1
+        id: snapcraft
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap
+          path: ${{ steps.snapcraft.outputs.snap }}
 
   # ── GitHub Release ──────────────────────────────────────────
   release:
-    needs: [package-deb, package-rpm, package-flatpak]
+    needs: [version, package-deb, package-rpm, installer-assets]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      # - uses: actions/download-artifact@v4
-      #   with:
-      #     path: dist/
-      - name: Create GitHub Release
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Collect release assets
         run: |
-          echo "TODO: Create release with artifacts"
-          # gh release create $TAG dist/* --title "allow2linux $TAG" --generate-notes
+          mkdir -p dist
+          # deb/rpm (per-arch), the daemon + overlay tarballs, and install.sh.
+          find artifacts -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name 'install.sh' \) \
+            -exec cp {} dist/ \;
+          echo "==> release assets:"; ls -la dist/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" dist/* \
+            --title "allow2linux ${{ needs.version.outputs.tag }}" \
+            --generate-notes

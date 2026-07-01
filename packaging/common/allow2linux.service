@@ -1,0 +1,39 @@
+# systemd --user unit shipped by the allow2linux .deb / .rpm packages.
+#
+# Installed system-wide to /usr/lib/systemd/user/allow2linux.service so it is
+# available to every user, and enabled for all users by the package postinstall
+# via `systemctl --global enable allow2linux.service`. Each user's linger is
+# enabled on first launch by the daemon (src/first-run.js) or manually with
+# `loginctl enable-linger "$USER"`.
+#
+# Unlike the Flatpak build, deb/rpm updates arrive through apt/dnf, so there is
+# NO auto-update timer here (the Flatpak-only allow2linux-update.{service,timer}
+# are intentionally not shipped in these packages).
+#
+# ExecStart is the production-locked launcher (/usr/bin/allow2linux) which bakes
+# ALLOW2_PRODUCTION=1 — the public packages are production-only.
+#
+# NOTE [production-lock gap, FLAGGED — see docs/DISTRIBUTION.md]: on first launch
+# the daemon's first-run writes a per-user copy of this unit to
+# ~/.config/systemd/user/allow2linux.service with a node-direct ExecStart that
+# does NOT re-export ALLOW2_PRODUCTION. index.js already defaults to the
+# production vid/token, so the daemon still talks to production by default; fully
+# closing the lock for packaged installs needs a small first-run.js change
+# (detect /usr/bin/allow2linux and use it as ExecStart, or copy this unit
+# verbatim). That is a shared-code design decision — flagged, not silently made.
+
+[Unit]
+Description=Allow2 Parental Freedom for Linux
+Documentation=https://github.com/Allow2/allow2linux
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/allow2linux
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

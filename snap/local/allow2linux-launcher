@@ -1,0 +1,9 @@
+#!/bin/sh
+# Snap launcher for allow2linux. The production env is set by the app's
+# `environment:` block in snapcraft.yaml (ALLOW2_PRODUCTION=1 etc.), so this
+# just execs the bundled Node against the daemon entry point.
+#
+# Node is bundled by the npm plugin (npm-include-node: true) at $SNAP/bin/node;
+# the daemon is organized to $SNAP/lib/allow2linux/src/index.js.
+set -eu
+exec "$SNAP/bin/node" "$SNAP/lib/allow2linux/src/index.js" "$@"
