@@ -8,9 +8,12 @@
 # The daemon auto-runs those three steps on first launch (see src/first-run.js);
 # this file is the authoritative unit they install.
 #
-# ExecStart targets the Flatpak install (the shipped/beta layout). The Flatpak
-# bakes ALLOW2_PRODUCTION=1 in its launcher, so the daemon is hard-pinned to
-# production regardless of any ALLOW2_ENV in the environment.
+# ExecStart targets the Flatpak install (the shipped layout). The channel is
+# baked into the Flatpak launcher at build time (see flatpak/gen-launcher.sh):
+#   stable channel → ALLOW2_PRODUCTION=1 baked → hard-pinned to production.
+#   beta channel   → ALLOW2_ENV=staging baked (prod flag omitted) → staging, for
+#                    the internal tester only. Either way the endpoint is fixed by
+#                    the build, not by any ALLOW2_ENV in the runtime environment.
 #
 # For the non-Flatpak dev layout (direct Node), first-run rewrites ExecStart to
 # the resolved `node .../src/index.js` path instead — see src/first-run.js.

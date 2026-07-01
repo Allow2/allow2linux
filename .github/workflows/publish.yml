@@ -1,0 +1,92 @@
+name: Publish (Flatpak → R2)
+
+# Builds the x86_64 Flatpak and publishes the ostree repo to a channel-specific
+# prefix on Cloudflare R2 (served at https://get.allow2.com/steamdeck/<channel>/).
+# Users pick it up via `flatpak update` / the auto-update timer.
+#
+# Two channels, two independent R2 prefixes (see docs/BETA_DELIVERY.md):
+#   staging channel   → push to `staging` branch  → publish.sh staging    → /steamdeck/staging/
+#   production channel → push a `vX.Y.Z` tag       → publish.sh production → /steamdeck/stable/
+#
+# Secrets (repo/org settings → Actions → Secrets):
+#   R2_ACCOUNT_ID  R2_BUCKET  R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY
+#   CLOUDFLARE_API_TOKEN  CLOUDFLARE_ZONE_ID
+#
+# Variables (repo/org settings → Actions → Variables — NOT Secrets; vid/token are
+# type identifiers, not secrets):
+#   ALLOW2_STAGING_VID  ALLOW2_STAGING_TOKEN   (defaults 21341 / QhkiFFPVfMkUjLUR)
+#   ALLOW2_PROD_VID     ALLOW2_PROD_TOKEN      (defaults 21599 / x9AUeUPpiweHTNCR)
+#
+# NOTE: the flatpak-builder run itself is [unverified-device] from the authoring
+# environment — validate it on a real x86_64 Linux host (this runner is one) and
+# test-install the result on the Steam Deck.
+
+on:
+  push:
+    branches: [staging]            # → staging channel (rolling betas)
+    tags: ['v*.*.*']               # → production channel (semver releases)
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Channel to build+publish'
+        default: staging
+        type: choice
+        options: [staging, production]
+
+concurrency:
+  # Serialise per-channel so two runs never race the same R2 prefix.
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve channel + version
+        id: chan
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ inputs.channel }}"
+            VERSION="manual-$(git rev-parse --short HEAD)"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            CHANNEL="production"
+            VERSION="${GITHUB_REF_NAME}"                     # the semver tag
+          else
+            CHANNEL="staging"
+            VERSION="staging-$(git rev-parse --short HEAD)"  # rolling build id
+          fi
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "==> channel=${CHANNEL}  version=${VERSION}"
+
+      - name: Install flatpak + flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder awscli
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub \
+            org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
+
+      - name: Build + publish
+        working-directory: examples/linux
+        env:
+          # R2 + Cloudflare (Secrets)
+          R2_ACCOUNT_ID:        ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET:            ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID:   ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          # vid/token type identifiers (Variables, NOT Secrets). gen-launcher.sh
+          # falls back to the known type ids if a Variable is unset.
+          ALLOW2_STAGING_VID:   ${{ vars.ALLOW2_STAGING_VID }}
+          ALLOW2_STAGING_TOKEN: ${{ vars.ALLOW2_STAGING_TOKEN }}
+          ALLOW2_PROD_VID:      ${{ vars.ALLOW2_PROD_VID }}
+          ALLOW2_PROD_TOKEN:    ${{ vars.ALLOW2_PROD_TOKEN }}
+          ALLOW2_VERSION:       ${{ steps.chan.outputs.version }}
+        run: |
+          chmod +x scripts/publish.sh flatpak/gen-launcher.sh
+          ./scripts/publish.sh "${{ steps.chan.outputs.channel }}"

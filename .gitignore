@@ -18,13 +18,17 @@ Thumbs.db
 packages/allow2-lock-overlay/allow2-lock-overlay
 packages/allow2-lock-overlay/build/
 
-# Flatpak build
+# Flatpak build (per-channel dirs: build-dir, build-staging, repo-stable, …)
 .flatpak-builder/
 flatpak/build/
+flatpak/build-*/
 flatpak/repo/
+flatpak/repo-*/
 flatpak/*.flatpak
 # Generated at build time by flatpak-node-generator
 flatpak/**/node-sources.json
+# Generated per-channel by gen-launcher.sh (staging=beta / production=stable)
+flatpak/allow2linux.launcher.sh
 
 # Snap build
 snap/*.snap

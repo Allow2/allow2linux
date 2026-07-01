@@ -1,0 +1,28 @@
+[Flatpak Ref]
+Title=Allow2 Parental Freedom (Beta)
+Name=com.allow2.allow2linux
+Branch=beta
+Url=https://get.allow2.com/steamdeck/staging/
+RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
+IsRuntime=false
+# INTERNAL BETA / STAGING channel — for the internal tester ONLY.
+#
+# This build's launcher DELIBERATELY targets STAGING: it bakes ALLOW2_ENV=staging
+# and OMITS the production flag, so the Allow2 SDK attaches to
+# staging-api.allow2.com. Published by:  ./scripts/publish.sh staging
+# (branch `beta`, R2 prefix /steamdeck/staging/).
+#
+# SECURITY: this staging build must stay on the beta channel and must NEVER be
+# promoted to stable / Flathub. The public/stable release uses
+# com.allow2.allow2linux.flatpakref (Branch=stable), whose launcher is
+# production-locked so staging is unreachable.
+#
+# `Branch=beta` MUST match the branch flatpak-builder exports for this channel
+# (publish.sh passes --default-branch=beta). The tester double-clicks this file
+# (or runs `flatpak install --from com.allow2.allow2linux-beta.flatpakref`); the
+# remote points at the staging R2 prefix and installs the beta build. Subsequent
+# `flatpak update` (and the auto-update timer) pull new betas from the same URL.
+#
+# NOTE: no GPGKey line => this beta remote is added with gpg-verify=false. That is
+# acceptable for a small INTERNAL tester group over HTTPS. Sign the ostree repo
+# for any wider rollout.
