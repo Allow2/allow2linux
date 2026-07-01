@@ -203,31 +203,23 @@ ${ROBOTS_META}
       </figure>
     </li>
     <li>
-      <div class="step-title">Install Allow2 from Konsole</div>
+      <div class="step-title">Install and launch Allow2</div>
       <p>Open <strong>Konsole</strong> from the <strong>Application Launcher &rarr;
-      System</strong>, then run these two commands. Tap either command to copy it,
-      paste it into Konsole, and press <strong>Enter</strong>.</p>
-      <p class="hint">1. Add the Flathub remote for the shared runtime. On SteamOS
-      Flathub is usually already present, so this is normally a no-op:</p>
-      <pre class="copyable"><code>flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo</code></pre>
-      <p class="hint">2. Install Allow2 from the <strong>${CHANNEL_LABEL}</strong>
-      channel:</p>
-      <pre class="copyable"><code>flatpak install --from ${REF_URL}</code></pre>
-      <p class="hint">This adds the Allow2 <code>${SUBDIR}</code> remote
-      (<code>Branch=${APP_BRANCH}</code>) and installs the app. Approve the prompts
-      Konsole shows (the runtime download plus the app itself).</p>
+      System</strong>. Tap the command to copy it, paste it into Konsole, and press
+      <strong>Enter</strong>. It adds the Flathub runtime remote if it is missing,
+      installs Allow2 from the <strong>${CHANNEL_LABEL}</strong> channel
+      (<code>${SUBDIR}</code> remote, <code>Branch=${APP_BRANCH}</code>), and
+      launches straight into pairing:</p>
+      <pre class="copyable"><code>flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo &amp;&amp; flatpak install -y --from ${REF_URL} &amp;&amp; flatpak run com.allow2.allow2linux</code></pre>
+      <p class="hint">First run sets up the background service and opens the pairing
+      screen. In the <strong>Allow2 app</strong>, scan the <strong>QR code</strong>
+      (or enter the <strong>6-digit PIN</strong>) and pick the child. That's the
+      pairing done.</p>
       <figure class="shot">
-        <img src="images/flathub-konsole.png" alt="Konsole terminal running the two flatpak commands to install Allow2" loading="lazy"
+        <img src="images/flathub-konsole.png" alt="Konsole terminal running the flatpak command that installs and launches Allow2" loading="lazy"
              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-        <figcaption class="shot-ph" style="display:none">Konsole terminal running the flatpak remote-add and flatpak install commands</figcaption>
+        <figcaption class="shot-ph" style="display:none">Konsole terminal running the flatpak install-and-launch command</figcaption>
       </figure>
-    </li>
-    <li>
-      <div class="step-title">Launch &amp; pair</div>
-      <p>Run Allow2 (Applications menu, or <code>flatpak run ${APP_ID}</code>). It
-      shows a pairing screen. In the <strong>Allow2 parent app</strong>, scan the
-      <strong>QR code</strong> (or type the <strong>6-digit PIN</strong>) and pick
-      the child. That's the pairing done.</p>
       <figure class="shot">
         <img src="images/pairing-qr.png" alt="Allow2 pairing screen showing the QR code and 6-digit PIN" loading="lazy"
              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
@@ -235,10 +227,17 @@ ${ROBOTS_META}
       </figure>
     </li>
     <li>
-      <div class="step-title">Verify the background service</div>
-      <p>On first run Allow2 installs its <code>systemd --user</code> service, the
-      auto-update timer, and enables <em>linger</em> (so it keeps running when
-      you're in Game Mode / logged out). Confirm:</p>
+      <div class="step-title">Keep it running after a reboot</div>
+      <p>Enable <em>linger</em> so the background service survives a reboot and
+      Game Mode. Tap to copy, run it in Konsole, and enter the <code>deck</code>
+      password when <code>sudo</code> asks:</p>
+      <pre class="copyable"><code>sudo loginctl enable-linger deck</code></pre>
+    </li>
+    <li>
+      <div class="step-title">Confirm it worked (optional)</div>
+      <p>First run installs the <code>systemd --user</code> service and the
+      auto-update timer. Check the service is running, the update timer is
+      scheduled, and linger is on:</p>
       <pre class="copyable"><code>systemctl --user status allow2linux.service        # active (running)
 systemctl --user list-timers | grep allow2linux    # update timer scheduled
 loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
