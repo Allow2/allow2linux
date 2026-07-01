@@ -26,8 +26,9 @@
 #     3. flatpak build-update-repo    (regenerate summary + metadata)
 #     4. sync repo/ -> s3://$R2_BUCKET/steamdeck/<staging|stable>/  (Cloudflare R2)
 #     5. publish the one-click .flatpakref + the static install page (index.html)
-#        into the same prefix (gen-install-page.sh bakes per-channel URLs/labels)
-#     6. purge the Cloudflare cache for that prefix's summary + ref + install page
+#        + the hardening page (hardening.html) + any page images into the same
+#        prefix (the gen-*-page.sh scripts bake per-channel URLs/labels)
+#     6. purge the Cloudflare cache for that prefix's summary + ref + both pages
 #
 # ── Required environment (NEVER hardcode secrets; see docs/BETA_DELIVERY.md) ──
 #   R2_ACCOUNT_ID          Cloudflare account id (for the R2 S3 endpoint host)
@@ -144,16 +145,22 @@ fi
 # These sit in the SAME prefix as the ostree repo, so they MUST be uploaded
 # AFTER the `--delete` sync above (which would otherwise remove them). On the
 # next run the sync deletes them and this step re-uploads — idempotent.
-#   /steamdeck/<channel>/<ref>          one-click install (Content-Type flatpak.ref)
-#   /steamdeck/<channel>/index.html     the install walkthrough (text/html)
-echo "==> [4/6] publish ${REF_FILE} + install page -> R2 (${SYNC_TOOL})"
+#   /steamdeck/<channel>/<ref>            one-click install (Content-Type flatpak.ref)
+#   /steamdeck/<channel>/index.html       the install walkthrough (text/html)
+#   /steamdeck/<channel>/hardening.html   the harden-against-bypass guide (text/html)
+#   /steamdeck/<channel>/images/          page screenshots, if present (step 4b)
+echo "==> [4/6] publish ${REF_FILE} + install page + hardening page -> R2 (${SYNC_TOOL})"
 
-# Generate the channel's install page (baked URLs/labels; staging=internal-only).
-# gen-install-page.sh takes the BASE url and appends /<subdir>/<ref> itself, so
-# pass PUBLIC_URL_BASE (not the subdir-suffixed PUBLIC_URL used for purging).
+# Generate the channel's install + hardening pages (baked URLs/labels;
+# staging=internal-only). Both generators take the BASE url and append
+# /<subdir>/… themselves, so pass PUBLIC_URL_BASE (not the subdir-suffixed
+# PUBLIC_URL used for purging). The pages cross-link within the SAME channel.
 INSTALL_PAGE="${PROJECT_ROOT}/flatpak/install-page-${SUBDIR}.html"
+HARDENING_PAGE="${PROJECT_ROOT}/flatpak/hardening-page-${SUBDIR}.html"
 PUBLIC_URL="${PUBLIC_URL_BASE}" APP_ID="${APP_ID}" \
     "${PROJECT_ROOT}/flatpak/gen-install-page.sh" "${CHANNEL}" "${INSTALL_PAGE}"
+PUBLIC_URL="${PUBLIC_URL_BASE}" \
+    "${PROJECT_ROOT}/flatpak/gen-hardening-page.sh" "${CHANNEL}" "${HARDENING_PAGE}"
 
 REF_SRC="${PROJECT_ROOT}/${REF_FILE}"
 [ -f "${REF_SRC}" ] || { echo "ERROR: ${REF_SRC} not found"; exit 1; }
@@ -174,9 +181,30 @@ r2_put() {  # r2_put <local-file> <dest-key> <content-type>
     fi
 }
 
-r2_put "${REF_SRC}"      "${PREFIX}/${SUBDIR}/${REF_FILE}" "application/vnd.flatpak.ref"
-r2_put "${INSTALL_PAGE}" "${PREFIX}/${SUBDIR}/index.html"  "text/html"
-echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html"
+r2_put "${REF_SRC}"        "${PREFIX}/${SUBDIR}/${REF_FILE}"     "application/vnd.flatpak.ref"
+r2_put "${INSTALL_PAGE}"   "${PREFIX}/${SUBDIR}/index.html"      "text/html"
+r2_put "${HARDENING_PAGE}" "${PREFIX}/${SUBDIR}/hardening.html"  "text/html"
+echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html + ${SUBDIR}/hardening.html"
+
+# ── 4b. Publish page images (if any) into the SAME prefix's images/ dir ───────
+# Both pages reference images/<slug>.png relative to the channel prefix. When the
+# repo has a flatpak/images/ dir (real screenshots dropped in later), mirror it to
+# /steamdeck/<channel>/images/. No dir yet → no-op (pages show onerror captions).
+IMAGES_SRC="${PROJECT_ROOT}/flatpak/images"
+if [ -d "${IMAGES_SRC}" ] && [ -n "$(ls -A "${IMAGES_SRC}" 2>/dev/null)" ]; then
+    echo "==> [4b] sync images/ -> ${SUBDIR}/images/ (${SYNC_TOOL})"
+    if [ "${SYNC_TOOL}" = "rclone" ]; then
+        rclone copy "${IMAGES_SRC}/" "r2beta:${R2_BUCKET}/${PREFIX}/${SUBDIR}/images/"
+    else
+        aws s3 sync "${IMAGES_SRC}/" "s3://${R2_BUCKET}/${PREFIX}/${SUBDIR}/images/" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --checksum-algorithm CRC32 \
+            --no-progress
+    fi
+    echo "    synced $(ls -1 "${IMAGES_SRC}" | wc -l | tr -d ' ') image(s) to ${SUBDIR}/images/"
+else
+    echo "==> [4b] no flatpak/images/ dir yet — skipping image upload (pages use onerror captions)"
+fi
 
 # ── 5. Purge the Cloudflare cache for THIS prefix's ostree metadata + pages ──
 # The .tgz objects are content-addressed (immutable) so caching them is fine,
@@ -195,6 +223,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
   "${PUBLIC_URL}/summary.idx",
   "${PUBLIC_URL}/config",
   "${PUBLIC_URL}/index.html",
+  "${PUBLIC_URL}/hardening.html",
   "${PUBLIC_URL}/${REF_FILE}"
 ]}
 JSON
@@ -204,7 +233,7 @@ JSON
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
         --data "${PURGE_FILES}" >/dev/null
-    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + ${REF_FILE}"
+    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + hardening.html + ${REF_FILE}"
 else
     echo "    SKIPPED — set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID to auto-purge."
     echo "    Until then, testers may see stale metadata until the CDN TTL expires."
@@ -214,6 +243,7 @@ echo ""
 echo "==> [6/6] Published ${CHANNEL} → ${PUBLIC_URL}/"
 echo "    One-click install:  ${PUBLIC_URL}/${REF_FILE}"
 echo "    Install page:       ${PUBLIC_URL}/  (index.html)"
+echo "    Hardening page:     ${PUBLIC_URL}/hardening.html"
 echo "    Users update with:  flatpak update -y ${APP_ID}"
 if [ "${CHANNEL}" = "staging" ]; then
     echo "    First-time install:  com.allow2.allow2linux-beta.flatpakref  (Branch=beta)"

@@ -62,6 +62,10 @@ OUT="${2:-${SCRIPT_DIR}/install-page-${SUBDIR}.html}"
 
 REF_URL="${PUBLIC_URL_BASE}/${SUBDIR}/${REF_FILE}"
 
+# Per-channel cross-link to THIS channel's hardening page (baked absolute so
+# staging links to staging and stable to stable — never cross-channel).
+HARDENING_URL="${PUBLIC_URL_BASE}/${SUBDIR}/hardening.html"
+
 # ── Per-channel security chrome ──────────────────────────────────────────────
 # staging: prominent internal-only banner + noindex (no public discoverability).
 # stable : public-facing, indexable, no banner.
@@ -265,6 +269,12 @@ loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
   <p>You're done. New versions arrive automatically (the update timer runs
   ~15&nbsp;min after boot and every 6&nbsp;hours). To force an update now:</p>
   <pre><code>flatpak update -y ${APP_ID}</code></pre>
+
+  <h2>Stop kids bypassing it</h2>
+  <p>On a Steam Deck the easy escape is dropping into Desktop Mode to switch the
+  service off. A few Steam settings close that door. See
+  <a href="${HARDENING_URL}">Harden Allow2 against bypass on Steam Deck</a> for the
+  layered steps (and an honest account of what they do and don't stop).</p>
   ${CROSS_NOTE}
 
   <footer>Allow2 Parental Freedom &middot; ${CHANNEL_LABEL} channel</footer>

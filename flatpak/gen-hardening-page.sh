@@ -1,9 +1,101 @@
+#!/usr/bin/env bash
+#
+# gen-hardening-page.sh — generate the channel-specific static "harden against
+# bypass" walkthrough (hardening.html) that is published alongside the install
+# page (index.html) into each channel's R2 prefix and served at
+# https://get.allow2.com/steamdeck/<channel>/hardening.html.
+#
+# ONE generator, TWO channels — mirrors gen-install-page.sh exactly: a single
+# HTML body with per-channel values (title, robots meta, internal-beta banner,
+# baked cross-link URL back to the install page) baked in from shell variables.
+# No divergent per-channel HTML files (no drift). This is the SINGLE source of
+# truth for the hardening page; the old static draft (site/hardening.draft.html)
+# has been retired in favour of this generator.
+#
+# ── Channels ─────────────────────────────────────────────────────────────────
+#   staging     (BETA, prefix /steamdeck/staging/):
+#               INTERNAL TESTER ONLY. The page carries a prominent internal-beta
+#               banner + security note, is marked noindex/nofollow, and NEVER
+#               links to or advertises the stable/public channel (its cross-link
+#               back to the install page stays inside /staging/).
+#
+#   production  (STABLE, prefix /steamdeck/stable/):
+#               the PUBLIC-facing hardening page. Indexable, no beta references.
+#               Never cross-links to staging.
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#   ./gen-hardening-page.sh <staging|production> [output-path]
+#   CHANNEL=staging ./gen-hardening-page.sh                   (env fallback)
+# Default CHANNEL is production (the safe default). Default output is
+# ./hardening-page-<subdir>.html next to this script; it is uploaded as
+# hardening.html by publish.sh.
+#
+# ── Options (env overrides) ──────────────────────────────────────────────────
+#   PUBLIC_URL   default: https://get.allow2.com/steamdeck   (base; /<subdir>/…)
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CHANNEL="${1:-${CHANNEL:-production}}"
+PUBLIC_URL_BASE="${PUBLIC_URL:-https://get.allow2.com/steamdeck}"
+
+# ── Channel → subdir + labels (mirrors gen-install-page.sh) ───────────────────
+case "${CHANNEL}" in
+  staging|beta)
+    SUBDIR="staging"
+    CHANNEL_LABEL="Internal Beta (staging)"
+    IS_STAGING=1
+    ;;
+  production|stable|prod)
+    SUBDIR="stable"
+    CHANNEL_LABEL="Stable"
+    IS_STAGING=0
+    ;;
+  *)
+    echo "ERROR: unknown CHANNEL='${CHANNEL}' (expected: staging|production)" >&2
+    exit 1
+    ;;
+esac
+
+OUT="${2:-${SCRIPT_DIR}/hardening-page-${SUBDIR}.html}"
+
+# Per-channel cross-link back to THIS channel's install page. Absolute + baked so
+# staging links to staging and stable links to stable — never cross-channel.
+INSTALL_URL="${PUBLIC_URL_BASE}/${SUBDIR}/index.html"
+
+# ── Per-channel security chrome ──────────────────────────────────────────────
+# staging: prominent internal-only banner + security note + noindex (no public
+#          discoverability). stable: public-facing, indexable, no banner.
+if [ "${IS_STAGING}" -eq 1 ]; then
+  ROBOTS_META='<meta name="robots" content="noindex,nofollow">'
+  PAGE_TITLE="Harden allow2linux on Steam Deck: Internal Beta (staging)"
+  SECURITY_BANNER='<div class="callout bad">
+    <p style="margin:0"><strong>INTERNAL BETA (staging). For the internal tester only.</strong>
+    This hardening guide accompanies the beta build that targets
+    <code>staging-api.allow2.com</code> and is unsigned
+    (<code>gpg-verify=false</code> over HTTPS). Do not share this page or link,
+    and never promote it to the stable/public channel.</p>
+  </div>'
+  # Staging-only internal pointer to the sourced notes + coverage matrix.
+  INTERNAL_NOTE='<p class="src">Internal (staging) only. Full sourced notes &amp; the coverage matrix:
+  <code>examples/linux/docs/STEAM_FAMILY_HARDENING.md</code>.</p>'
+else
+  ROBOTS_META=''
+  PAGE_TITLE="Harden allow2linux on Steam Deck &middot; Allow2 Parental Freedom"
+  SECURITY_BANNER=''
+  INTERNAL_NOTE=''
+fi
+
+# ── Emit the page (unquoted heredoc: shell vars expand; no literal $ in body) ─
+cat > "${OUT}" <<EOF
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Harden allow2linux on Steam Deck &middot; Allow2 Parental Freedom</title>
+${ROBOTS_META}
+<title>${PAGE_TITLE}</title>
 <meta name="description" content="Layered steps to make allow2linux much harder to bypass on a Steam Deck using Steam Families / Family View, plus an honest account of what these controls do and don't stop.">
 <style>
   :root{
@@ -88,6 +180,8 @@
   using Steam&rsquo;s own <strong>Family&nbsp;/&nbsp;Steam&nbsp;Families</strong> controls to lock down the
   Steam Deck. Honest about what it stops, and what it can&rsquo;t.</p>
 </header>
+
+${SECURITY_BANNER}
 
 <div class="callout honest">
   <p style="margin:0"><strong>Read this first: this is hardening, not a lock.</strong> These steps make
@@ -237,8 +331,8 @@ Add <strong>router / DNS time and content controls</strong> as the durable backs
 the Deck&rsquo;s own software is removed, because they live on your network, not the Deck.</p>
 
 <div style="text-align:center;margin-top:30px">
-  <a class="backlink" href="./index.html">&larr; Back to the install page</a>
-  <p class="src" style="margin-top:10px">Or start at <a href="https://get.allow2.com/steamdeck/">get.allow2.com/steamdeck</a></p>
+  <a class="backlink" href="${INSTALL_URL}">&larr; Back to the install page</a>
+  <p class="src" style="margin-top:10px">Or start at <a href="${PUBLIC_URL_BASE}/${SUBDIR}/">get.allow2.com/steamdeck/${SUBDIR}</a></p>
 </div>
 
 <footer>
@@ -256,10 +350,17 @@ the Deck&rsquo;s own software is removed, because they live on your network, not
     <a href="https://www.gamingonlinux.com/guides/view/how-to-set-change-and-reset-your-steamos-steam-deck-desktop-sudo-password/">SteamOS sudo password (GamingOnLinux)</a> &middot;
     <a href="https://help.steampowered.com/en/faqs/view/1B71-EDF2-EB6D-2BB3">Steam Support: Boot Manager / recovery</a>
   </p>
-  <p class="src">Draft, not yet wired into hosting. Full sourced notes &amp; the coverage matrix:
-  <code>examples/linux/docs/STEAM_FAMILY_HARDENING.md</code>.</p>
+  ${INTERNAL_NOTE}
 </footer>
 
 </div>
 </body>
 </html>
+EOF
+
+echo "==> hardening page: channel=${CHANNEL} (${CHANNEL_LABEL}) → ${SUBDIR}/hardening.html"
+echo "    back to install → ${INSTALL_URL}"
+if [ "${IS_STAGING}" -eq 1 ]; then
+  echo "    marked noindex/nofollow + internal-beta banner; no link to public/stable"
+fi
+echo "    wrote ${OUT}"
