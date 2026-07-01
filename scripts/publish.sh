@@ -186,6 +186,18 @@ r2_put "${INSTALL_PAGE}"   "${PREFIX}/${SUBDIR}/index.html"      "text/html"
 r2_put "${HARDENING_PAGE}" "${PREFIX}/${SUBDIR}/hardening.html"  "text/html"
 echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html + ${SUBDIR}/hardening.html"
 
+# ── 4a. Publish the domain-root robots.txt (excludes the staging beta) ────────
+# This is a DOMAIN-ROOT object (served at get.allow2.com/robots.txt), NOT under
+# steamdeck/<channel>/ — robots.txt is only honoured at the site root. It is
+# channel-agnostic (Disallow: /steamdeck/staging/, stable stays crawlable), so we
+# (re-)upload it on EVERY publish regardless of channel: idempotent + cheap, and
+# it can't be clobbered by the per-channel --delete sync (that only scopes the
+# steamdeck/<channel>/ prefix).
+ROBOTS_SRC="${PROJECT_ROOT}/robots.txt"
+[ -f "${ROBOTS_SRC}" ] || { echo "ERROR: ${ROBOTS_SRC} not found"; exit 1; }
+r2_put "${ROBOTS_SRC}" "robots.txt" "text/plain"
+echo "    uploaded robots.txt -> bucket root (served at get.allow2.com/robots.txt)"
+
 # ── 4b. Publish page images (if any) into the SAME prefix's images/ dir ───────
 # Both pages reference images/<slug>.png relative to the channel prefix. When the
 # repo has a flatpak/images/ dir (real screenshots dropped in later), mirror it to
@@ -224,7 +236,8 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
   "${PUBLIC_URL}/config",
   "${PUBLIC_URL}/index.html",
   "${PUBLIC_URL}/hardening.html",
-  "${PUBLIC_URL}/${REF_FILE}"
+  "${PUBLIC_URL}/${REF_FILE}",
+  "https://get.allow2.com/robots.txt"
 ]}
 JSON
 )
@@ -233,7 +246,7 @@ JSON
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
         --data "${PURGE_FILES}" >/dev/null
-    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + hardening.html + ${REF_FILE}"
+    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + hardening.html + ${REF_FILE} + root robots.txt"
 else
     echo "    SKIPPED — set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID to auto-purge."
     echo "    Until then, testers may see stale metadata until the CDN TTL expires."

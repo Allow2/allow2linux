@@ -1,0 +1,4 @@
+# Keep the internal beta (staging channel) out of search engines.
+# /steamdeck/stable/ stays crawlable for SEO; only the staging prefix is excluded.
+User-agent: *
+Disallow: /steamdeck/staging/
