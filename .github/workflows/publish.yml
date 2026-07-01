@@ -61,10 +61,17 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "==> channel=${CHANNEL}  version=${VERSION}"
 
-      - name: Install flatpak + flatpak-builder
+      - name: Install flatpak + flatpak-builder + aws
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder awscli
+          sudo apt-get install -y flatpak flatpak-builder curl unzip
+          # AWS CLI v2 via the official installer — the `awscli` apt package was
+          # dropped in Ubuntu 24.04 (noble), so `apt-get install awscli` has no
+          # candidate. (This is also aws-cli >=2.23, which is why publish.sh passes
+          # --checksum-algorithm CRC32 for R2.)
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q -o /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
           sudo flatpak remote-add --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub \
