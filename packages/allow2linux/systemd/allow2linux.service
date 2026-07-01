@@ -1,14 +1,33 @@
+# Canonical `systemd --user` unit for allow2linux.
+#
+# Install to ~/.config/systemd/user/allow2linux.service, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now allow2linux.service
+#   loginctl enable-linger "$USER"      # start at boot without an interactive login
+#
+# The daemon auto-runs those three steps on first launch (see src/first-run.js);
+# this file is the authoritative unit they install.
+#
+# ExecStart targets the Flatpak install (the shipped/beta layout). The Flatpak
+# bakes ALLOW2_PRODUCTION=1 in its launcher, so the daemon is hard-pinned to
+# production regardless of any ALLOW2_ENV in the environment.
+#
+# For the non-Flatpak dev layout (direct Node), first-run rewrites ExecStart to
+# the resolved `node .../src/index.js` path instead — see src/first-run.js.
+
 [Unit]
 Description=Allow2 Parental Freedom for Linux
-After=network-online.target
+Documentation=https://github.com/Allow2/allow2linux
+After=network-online.target graphical-session.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node %h/.allow2/allow2linux/src/index.js
+ExecStart=/usr/bin/flatpak run com.allow2.allow2linux
 Restart=always
 RestartSec=5
-Environment=NODE_ENV=production
+# Give the overlay/child a moment on shutdown, then hard-stop.
+TimeoutStopSec=10
 
 [Install]
 WantedBy=default.target

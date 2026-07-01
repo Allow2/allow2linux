@@ -1,0 +1,50 @@
+name: Publish Beta (Flatpak → R2)
+
+# Builds the x86_64 Flatpak and publishes the ostree repo to the internal beta
+# channel (Cloudflare R2, served at https://get.allow2.com/steamdeck/) on a
+# version tag. Testers pick it up via `flatpak update` / the auto-update timer.
+#
+# Secrets (repo/org settings → Actions secrets):
+#   R2_ACCOUNT_ID  R2_BUCKET  R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY
+#   CLOUDFLARE_API_TOKEN  CLOUDFLARE_ZONE_ID
+#
+# NOTE: the flatpak-builder run itself is [unverified-device] from the authoring
+# environment — it must be validated on a real x86_64 Linux host (this runner
+# is one) and the resulting build test-installed on the Steam Deck.
+
+on:
+  push:
+    tags: ['v*-beta', 'beta-*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish-beta
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak + flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder awscli
+          sudo flatpak remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub \
+            org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
+
+      - name: Build + publish beta
+        working-directory: examples/linux
+        env:
+          R2_ACCOUNT_ID:        ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET:            ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID:   ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          chmod +x scripts/publish-beta.sh
+          ./scripts/publish-beta.sh

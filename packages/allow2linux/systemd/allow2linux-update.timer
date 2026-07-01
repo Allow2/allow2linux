@@ -1,0 +1,17 @@
+# Timer that drives allow2linux-update.service (Flatpak beta auto-update).
+#
+# Fires ~15 min after boot and every 6 hours thereafter, with jitter so a fleet
+# of testers doesn't hammer the CDN at the same instant. Persistent=true runs a
+# missed update once the device wakes/reboots (Steam Deck is often suspended).
+
+[Unit]
+Description=Periodic update check for Allow2 Parental Freedom (beta)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

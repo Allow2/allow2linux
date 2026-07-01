@@ -2,9 +2,23 @@
  * Minimal QR Code generator — produces SVG string.
  * Pure JS, zero dependencies, works offline.
  *
- * Supports alphanumeric mode up to ~4000 chars (version 1-40).
- * Uses byte mode for simplicity. Error correction level M.
+ * Byte mode, error correction level M.
+ *
+ * SUPPORTED RANGE: versions 1–10 only. The EC-codeword, alignment-pattern and
+ * total-codeword tables below are complete and validated for v1–10 (up to
+ * MAX_BYTES bytes of payload). Versions 11–20 require full block-group EC data
+ * and additional alignment-pattern coordinates that are NOT modelled here;
+ * emitting one would produce a QR with missing/incorrect error-correction and
+ * alignment patterns — i.e. an UNSCANNABLE code. Rather than do that silently,
+ * encode() throws for over-long payloads, and the public wrappers return
+ * null / '' so callers fall back to showing the numeric PIN + short URL.
+ *
+ * Pairing URLs (e.g. https://app.allow2.com/pair?pin=NNNNNN, ~40 bytes → v3)
+ * are comfortably within range; the guard only trips on unexpectedly long input.
  */
+
+// Highest QR version with complete, validated tables in this file.
+var MAX_VERSION = 10;
 
 // ── QR Tables ────────────────────────────────────────────────
 
@@ -341,13 +355,28 @@ function encode(text) {
         data.push(text.charCodeAt(i));
     }
 
-    // Find smallest version that fits
-    var version = 1;
-    for (var v = 1; v <= 20; v++) {
+    // Validate payload length against the supported range BEFORE encoding.
+    // CAPACITIES[MAX_VERSION] is the largest byte-mode payload we can encode
+    // correctly (EC level M). Anything larger would need v11+ tables we don't
+    // have — refuse rather than emit an unscannable code.
+    var MAX_BYTES = CAPACITIES[MAX_VERSION];
+    if (data.length > MAX_BYTES) {
+        throw new Error('QR payload too long: ' + data.length + ' bytes exceeds max '
+            + MAX_BYTES + ' (v' + MAX_VERSION + ', EC-M). Shorten the URL/PIN payload.');
+    }
+
+    // Find smallest version that fits (bounded to the supported range).
+    var version = MAX_VERSION;
+    for (var v = 1; v <= MAX_VERSION; v++) {
         if (CAPACITIES[v] >= data.length) {
             version = v;
             break;
         }
+    }
+
+    // Defensive: every supported version must have complete EC data.
+    if (!EC_TABLE[version]) {
+        throw new Error('QR internal error: missing EC table for v' + version);
     }
 
     var size = 17 + version * 4;

@@ -11,12 +11,13 @@
  *   5. Parent    → unrestricted, no enforcement
  */
 
-import { DeviceDaemon, ChildShield, PlaintextBackend, resolveLinuxUser } from 'allow2';
+import { DeviceDaemon, ChildShield, PlaintextBackend, resolveLinuxUser, UpdatePoller } from 'allow2';
 import { ProcessClassifier } from './process-classifier.js';
 import { SteamMonitor } from './steam.js';
 import { DesktopNotifier } from './desktop-notify.js';
 import { SessionManager } from './session.js';
 import { OverlayBridge } from './overlay-bridge.js';
+import { ensureFirstRunSetup } from './first-run.js';
 import { execSync } from 'node:child_process';
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -109,6 +110,88 @@ function _childHasPin(childId) {
         }
     }
     return false;
+}
+
+// --- Mid-session getUpdates polling ---
+//
+// The SDK's DeviceDaemon polls getUpdates via its lightweight heartbeat ONLY
+// when paired-but-idle (no child selected). Once a child is selected and the
+// check loop is enforcing, the heartbeat stops — so extension approvals, new
+// bans, day-type switches and children/PIN changes were not being picked up
+// mid-session (the check API returns allowed/remaining but NOT the children
+// list). We run the SDK's UpdatePoller during enforcement to close that gap.
+// Complementary, not duplicate: heartbeat covers idle, this covers enforcing.
+var updatePoller = null;
+
+function _startUpdatePoller() {
+    var creds = daemon.credentials;
+    if (!creds || !creds.pairId || !creds.pairToken) return;
+
+    if (updatePoller) {
+        // Already running — refresh credentials (deviceToken may have rotated).
+        return;
+    }
+
+    updatePoller = new UpdatePoller({ api: daemon.api, pollInterval: 30000 });
+
+    updatePoller.on('children-updated', function (children) {
+        if (!children) return;
+        // Keep ChildShield (PIN hashes, names) and the daemon's cached
+        // credentials in sync so the selector/PIN screens reflect changes.
+        _initChildShield(children);
+        if (daemon.credentials) {
+            daemon.credentials.children = children;
+        }
+        console.log('[updates] children list refreshed (' + children.length + ')');
+    });
+
+    updatePoller.on('extension', function (data) {
+        console.log('[updates] extension: child=' + data.childId + ' activity=' + data.activity
+            + ' +' + data.additionalMinutes + 'min');
+        // The check loop will reflect the new remaining on its next cycle and
+        // unlock if soft-locked; surface it to the child immediately too.
+        notifier.notify('More time approved.', 'info');
+    });
+
+    updatePoller.on('ban', function (data) {
+        console.log('[updates] ban change: child=' + data.childId + ' activity=' + data.activity
+            + ' banned=' + data.banned);
+    });
+
+    updatePoller.on('day-type-changed', function (data) {
+        console.log('[updates] day-type changed: child=' + data.childId + ' dayType=' + data.dayType);
+    });
+
+    updatePoller.on('quota-updated', function (data) {
+        console.log('[updates] quota updated: child=' + data.childId + ' activity=' + data.activity
+            + ' newQuota=' + data.newQuota);
+    });
+
+    updatePoller.on('unpaired', function () {
+        // Server revoked the device — mirror the daemon's unpair handling.
+        _stopUpdatePoller();
+    });
+
+    updatePoller.on('error', function (err) {
+        // Network blips are expected; log at low volume.
+        console.log('[updates] poll error: ' + (err && err.message ? err.message : err));
+    });
+
+    updatePoller.start({
+        userId: creds.userId,
+        pairId: creds.pairId,
+        pairToken: creds.pairToken,
+        deviceToken: creds.deviceToken,
+    });
+    console.log('[updates] mid-session poller started');
+}
+
+function _stopUpdatePoller() {
+    if (updatePoller) {
+        updatePoller.stop();
+        updatePoller = null;
+        console.log('[updates] mid-session poller stopped');
+    }
 }
 
 // --- Overlay events (from SDL2 binary) ---
@@ -362,15 +445,19 @@ daemon.on('child-select-required', function (data) {
 daemon.on('child-selected', function (data) {
     overlay.dismiss();
     console.log('Child selected: ' + (data.name || 'unknown') + ' (id=' + data.childId + ')');
+    // Enforcement has started — begin mid-session getUpdates polling.
+    _startUpdatePoller();
 });
 
 daemon.on('parent-mode', function () {
     console.log('Parent mode — no restrictions');
     overlay.dismiss();
+    _stopUpdatePoller();
 });
 
 daemon.on('session-timeout', function () {
     console.log('Session timed out, re-identifying child...');
+    _stopUpdatePoller();
 });
 
 // --- Warning events (Step 3) ---
@@ -468,6 +555,7 @@ daemon.on('offline-deny', async function () {
 daemon.on('unpaired', function () {
     console.log('Device unpaired by server (HTTP 401). Going dormant.');
     childShield = null;
+    _stopUpdatePoller();
     overlay.dismiss();
     // Daemon already stopped enforcement internally
 });
@@ -509,6 +597,14 @@ process.on('unhandledRejection', function (reason) {
 
 _log('allow2linux starting...');
 
+// First-run: ensure linger + user service so the daemon survives reboot
+// without an interactive login. Best-effort and non-fatal — never blocks start.
+ensureFirstRunSetup(_log).then(function (status) {
+    _log('First-run setup: linger=' + status.linger + ', service=' + status.service);
+}).catch(function (err) {
+    _logError('First-run setup error: ' + (err && err.message ? err.message : err));
+});
+
 // Start overlay, then daemon. Overlay failure is non-fatal — daemon can still
 // pair via the SDK's HTTP pairing wizard (port 3000) without the SDL2 overlay.
 overlay.start().then(function () {
@@ -535,6 +631,7 @@ daemon.start().then(function () {
 // Graceful shutdown
 process.on('SIGTERM', function () {
     _log('Shutting down (SIGTERM)...');
+    _stopUpdatePoller();
     daemon.stop();
     overlay.stop();
     process.exit(0);
@@ -542,6 +639,7 @@ process.on('SIGTERM', function () {
 
 process.on('SIGINT', function () {
     _log('Shutting down (SIGINT)...');
+    _stopUpdatePoller();
     daemon.stop();
     overlay.stop();
     process.exit(0);

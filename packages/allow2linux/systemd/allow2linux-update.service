@@ -1,0 +1,21 @@
+# One-shot Flatpak auto-update for the allow2linux beta channel.
+# Paired with allow2linux-update.timer. Install both as `systemd --user` units:
+#   cp allow2linux-update.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now allow2linux-update.timer
+#
+# Pulls the newest commit published by scripts/publish-beta.sh from the R2 repo,
+# then restarts the daemon so the tester runs the fresh build. Requires linger
+# (enabled by the daemon's first-run) so it also runs while no one is logged in.
+
+[Unit]
+Description=Update Allow2 Parental Freedom (Flatpak beta channel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# --user: the app is installed per-user (flatpak install --user). -y: no prompt.
+ExecStart=/usr/bin/flatpak update --user -y --noninteractive com.allow2.allow2linux
+# Restart the running daemon onto the new build (ignore failure if not active).
+ExecStartPost=-/usr/bin/systemctl --user try-restart allow2linux.service

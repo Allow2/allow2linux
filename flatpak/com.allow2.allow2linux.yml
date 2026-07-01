@@ -70,6 +70,12 @@ modules:
   # All deps (allow2 SDK + ws + transitive) installed via npm from registry
   - name: allow2linux
     buildsystem: simple
+    # DEV manifest only: allow network during build so `npm install` can fetch
+    # the published `allow2` SDK + `ws` from the registry. (The Flathub manifest
+    # instead uses an offline yarn mirror via node-sources.json — no network.)
+    build-options:
+      build-args:
+        - --share=network
     build-commands:
       - mkdir -p /app/lib/allow2linux
       - cp -r src config systemd package.json /app/lib/allow2linux/

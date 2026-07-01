@@ -1,0 +1,20 @@
+[Flatpak Ref]
+Title=Allow2 Parental Freedom (Beta)
+Name=com.allow2.allow2linux
+Branch=master
+Url=https://get.allow2.com/steamdeck/
+RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
+IsRuntime=false
+# NOTE: no GPGKey line => this beta remote is added with gpg-verify=false.
+# That is acceptable for a small INTERNAL tester group over HTTPS. For a wider
+# / production rollout, sign the ostree repo (flatpak build-sign / --gpg-sign
+# in publish-beta.sh) and paste the base64 public key here as `GPGKey=...`.
+#
+# The tester double-clicks this file (or runs `flatpak install --from
+# com.allow2.allow2linux.flatpakref`). It adds the "allow2-beta" remote pointing
+# at the Cloudflare-R2-backed repo and installs the app. Subsequent
+# `flatpak update` (and the auto-update timer) pull new builds from the same URL.
+#
+# `Branch=master` MUST match the branch flatpak-builder exports (its default is
+# `master`; publish-beta.sh keeps that default). If you change the export branch,
+# change it here too.
