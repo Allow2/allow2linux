@@ -143,6 +143,14 @@ ${ROBOTS_META}
   }
   code,kbd{background:#0b0f14;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e3b341}
   kbd{color:#e6edf3}
+  /* Tap-to-copy affordance (finger-driven on the Deck; also works with a click/keyboard). */
+  .copyable{position:relative;cursor:pointer}
+  .copyable:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+  pre.copyable{background:#0b0f14;border:1px solid var(--line);border-radius:10px;padding:12px 96px 12px 14px;margin:12px 0;overflow-x:auto;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e3b341}
+  pre.copyable code{background:none;border:0;padding:0;color:inherit;font:inherit}
+  .copy-hint{position:absolute;top:8px;right:8px;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 9px;pointer-events:none;user-select:none}
+  .copyable:hover .copy-hint{color:var(--ink);border-color:#6e7681}
+  .copyable.copied .copy-hint{color:var(--ok);border-color:var(--ok);background:#0f1c12}
   .flag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;background:#3a2d0a;color:var(--brand2);border:1px solid #5c470f;border-radius:5px;padding:1px 6px;vertical-align:middle}
   table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;display:block;overflow-x:auto}
   th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}
@@ -257,7 +265,8 @@ if allow2linux is defeated, Steam still enforces time limits on Steam content.</
 control. Set one (as the parent).</p>
 <ol class="steps">
   <li>Enter <strong>Desktop Mode</strong> once, yourself.</li>
-  <li>Open <strong>Konsole</strong>, run <code>passwd</code>, and set a password only you know.</li>
+  <li>Open <strong>Konsole</strong> and run this (tap to copy), then set a password only you know:
+      <pre class="copyable"><code>passwd</code></pre></li>
 </ol>
 <div class="callout honest">
   <p style="margin:0"><strong>Speed-bump, not a wall.</strong> A sudo password only slows down someone who is
@@ -354,6 +363,63 @@ the Deck&rsquo;s own software is removed, because they live on your network, not
 </footer>
 
 </div>
+<script>
+// Tap-to-copy for command blocks. Self-contained, no external deps.
+(function () {
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(t);
+    }
+    return new Promise(function (resolve, reject) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = t; ta.setAttribute('readonly', '');
+        ta.style.position = 'absolute'; ta.style.left = '-9999px';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      } catch (e) { reject(e); }
+    });
+  }
+  function enhance(el) {
+    var cmd = el.textContent.trim();
+    var idle = 'Tap to copy';
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', 'Copy command to clipboard');
+    var hint = document.createElement('span');
+    hint.className = 'copy-hint';
+    hint.setAttribute('aria-hidden', 'true');
+    hint.textContent = idle;
+    el.appendChild(hint);
+    var timer = null;
+    function flash() {
+      el.classList.add('copied');
+      hint.textContent = 'Copied!';
+      if (timer) { clearTimeout(timer); }
+      timer = setTimeout(function () {
+        el.classList.remove('copied');
+        hint.textContent = idle;
+      }, 1500);
+    }
+    function activate() { copyText(cmd).then(flash).catch(function () {}); }
+    el.addEventListener('click', activate);
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault(); activate();
+      }
+    });
+  }
+  function init() {
+    var nodes = document.querySelectorAll('.copyable');
+    Array.prototype.forEach.call(nodes, enhance);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else { init(); }
+})();
+</script>
 </body>
 </html>
 EOF

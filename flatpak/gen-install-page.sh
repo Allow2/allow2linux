@@ -126,6 +126,18 @@ ${ROBOTS_META}
     padding: 14px 16px; overflow-x: auto; margin: 12px 0;
   }
   pre code { background: none; border: 0; padding: 0; }
+  /* Tap-to-copy affordance (finger-driven on the Deck; also works with a click/keyboard). */
+  .copyable { position: relative; cursor: pointer; }
+  .copyable:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+  pre.copyable { padding-right: 96px; }
+  .copy-hint {
+    position: absolute; top: 8px; right: 8px;
+    font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+    color: #8b949e; background: #0d1117; border: 1px solid #30363d;
+    border-radius: 6px; padding: 3px 9px; pointer-events: none; user-select: none;
+  }
+  .copyable:hover .copy-hint { color: #e6edf3; border-color: #6e7681; }
+  .copyable.copied .copy-hint { color: #3fb950; border-color: #3fb950; background: #0f1c12; }
   ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
   ol.steps > li {
     counter-increment: step; position: relative;
@@ -140,13 +152,6 @@ ${ROBOTS_META}
     display: flex; align-items: center; justify-content: center;
   }
   .step-title { font-weight: 600; font-size: 1.05rem; margin-bottom: 4px; }
-  .cta {
-    display: inline-block; margin: 14px 0 4px; padding: 14px 26px;
-    background: #238636; color: #fff; text-decoration: none;
-    border-radius: 8px; font-size: 1.15rem; font-weight: 700;
-    border: 1px solid #2ea043;
-  }
-  .cta:hover { background: #2ea043; }
   .hint { color: #8b949e; font-size: .9rem; }
   figure.shot { margin: 12px 0 6px; }
   figure.shot img {
@@ -198,31 +203,24 @@ ${ROBOTS_META}
       </figure>
     </li>
     <li>
-      <div class="step-title">One-time: add Flathub for the runtime</div>
-      <p>Allow2 uses the Freedesktop runtime from Flathub. If Flathub isn't set up
-      yet, open a terminal (Konsole) and run:</p>
-      <pre><code>flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo</code></pre>
-      <p class="hint">On SteamOS Flathub is usually already present, so this is a no-op.</p>
-      <figure class="shot">
-        <img src="images/flathub-konsole.png" alt="Konsole terminal showing the flatpak remote-add Flathub command" loading="lazy"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-        <figcaption class="shot-ph" style="display:none">Konsole terminal running the flatpak remote-add Flathub command</figcaption>
-      </figure>
-    </li>
-    <li>
-      <div class="step-title">Install Allow2</div>
-      <p>Click the button below. Your software installer (Discover) opens and
-      installs Allow2 from the <strong>${CHANNEL_LABEL}</strong> channel:</p>
-      <p><a class="cta" href="${REF_URL}">Install on Steam Deck</a></p>
-      <figure class="shot">
-        <img src="images/discover-install.png" alt="Discover software installer showing Allow2 with the Install button" loading="lazy"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-        <figcaption class="shot-ph" style="display:none">Discover software installer open on the Allow2 page, Install button visible</figcaption>
-      </figure>
-      <p class="hint">Button not working? Copy-paste this into Konsole instead:</p>
-      <pre><code>flatpak install --from ${REF_URL}</code></pre>
+      <div class="step-title">Install Allow2 from Konsole</div>
+      <p>Open <strong>Konsole</strong> from the <strong>Application Launcher &rarr;
+      System</strong>, then run these two commands. Tap either command to copy it,
+      paste it into Konsole, and press <strong>Enter</strong>.</p>
+      <p class="hint">1. Add the Flathub remote for the shared runtime. On SteamOS
+      Flathub is usually already present, so this is normally a no-op:</p>
+      <pre class="copyable"><code>flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo</code></pre>
+      <p class="hint">2. Install Allow2 from the <strong>${CHANNEL_LABEL}</strong>
+      channel:</p>
+      <pre class="copyable"><code>flatpak install --from ${REF_URL}</code></pre>
       <p class="hint">This adds the Allow2 <code>${SUBDIR}</code> remote
-      (<code>Branch=${APP_BRANCH}</code>) and installs the app.</p>
+      (<code>Branch=${APP_BRANCH}</code>) and installs the app. Approve the prompts
+      Konsole shows (the runtime download plus the app itself).</p>
+      <figure class="shot">
+        <img src="images/flathub-konsole.png" alt="Konsole terminal running the two flatpak commands to install Allow2" loading="lazy"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+        <figcaption class="shot-ph" style="display:none">Konsole terminal running the flatpak remote-add and flatpak install commands</figcaption>
+      </figure>
     </li>
     <li>
       <div class="step-title">Launch &amp; pair</div>
@@ -241,7 +239,7 @@ ${ROBOTS_META}
       <p>On first run Allow2 installs its <code>systemd --user</code> service, the
       auto-update timer, and enables <em>linger</em> (so it keeps running when
       you're in Game Mode / logged out). Confirm:</p>
-      <pre><code>systemctl --user status allow2linux.service        # active (running)
+      <pre class="copyable"><code>systemctl --user status allow2linux.service        # active (running)
 systemctl --user list-timers | grep allow2linux    # update timer scheduled
 loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
       <figure class="shot">
@@ -268,7 +266,7 @@ loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
   <h2>Automatic updates</h2>
   <p>You're done. New versions arrive automatically (the update timer runs
   ~15&nbsp;min after boot and every 6&nbsp;hours). To force an update now:</p>
-  <pre><code>flatpak update -y ${APP_ID}</code></pre>
+  <pre class="copyable"><code>flatpak update -y ${APP_ID}</code></pre>
 
   <h2>Stop kids bypassing it</h2>
   <p>On a Steam Deck the easy escape is dropping into Desktop Mode to switch the
@@ -279,12 +277,69 @@ loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
 
   <footer>Allow2 Parental Freedom &middot; ${CHANNEL_LABEL} channel</footer>
 </div>
+<script>
+// Tap-to-copy for every command block. Self-contained, no external deps.
+(function () {
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(t);
+    }
+    return new Promise(function (resolve, reject) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = t; ta.setAttribute('readonly', '');
+        ta.style.position = 'absolute'; ta.style.left = '-9999px';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      } catch (e) { reject(e); }
+    });
+  }
+  function enhance(el) {
+    var cmd = el.textContent.trim();
+    var idle = 'Tap to copy';
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', 'Copy command to clipboard');
+    var hint = document.createElement('span');
+    hint.className = 'copy-hint';
+    hint.setAttribute('aria-hidden', 'true');
+    hint.textContent = idle;
+    el.appendChild(hint);
+    var timer = null;
+    function flash() {
+      el.classList.add('copied');
+      hint.textContent = 'Copied!';
+      if (timer) { clearTimeout(timer); }
+      timer = setTimeout(function () {
+        el.classList.remove('copied');
+        hint.textContent = idle;
+      }, 1500);
+    }
+    function activate() { copyText(cmd).then(flash).catch(function () {}); }
+    el.addEventListener('click', activate);
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault(); activate();
+      }
+    });
+  }
+  function init() {
+    var nodes = document.querySelectorAll('.copyable');
+    Array.prototype.forEach.call(nodes, enhance);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else { init(); }
+})();
+</script>
 </body>
 </html>
 EOF
 
 echo "==> install page: channel=${CHANNEL} (${CHANNEL_LABEL}) → ${SUBDIR}/index.html"
-echo "    install button → ${REF_URL}"
+echo "    install command ref → ${REF_URL}"
 if [ "${IS_STAGING}" -eq 1 ]; then
   echo "    marked noindex/nofollow + internal-only banner; no link to public/stable"
 fi
