@@ -25,7 +25,9 @@
 #     2. flatpak-builder --default-branch=<beta|stable>  (build + export ostree)
 #     3. flatpak build-update-repo    (regenerate summary + metadata)
 #     4. sync repo/ -> s3://$R2_BUCKET/steamdeck/<staging|stable>/  (Cloudflare R2)
-#     5. purge the Cloudflare cache for that prefix's ostree summary files
+#     5. publish the one-click .flatpakref + the static install page (index.html)
+#        into the same prefix (gen-install-page.sh bakes per-channel URLs/labels)
+#     6. purge the Cloudflare cache for that prefix's summary + ref + install page
 #
 # ── Required environment (NEVER hardcode secrets; see docs/BETA_DELIVERY.md) ──
 #   R2_ACCOUNT_ID          Cloudflare account id (for the R2 S3 endpoint host)
@@ -57,9 +59,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHANNEL="${1:-}"
 case "${CHANNEL}" in
     staging|beta)
-        CHANNEL="staging"; FLATPAK_BRANCH="beta";   SUBDIR="staging" ;;
+        CHANNEL="staging"; FLATPAK_BRANCH="beta";   SUBDIR="staging"
+        REF_FILE="com.allow2.allow2linux-beta.flatpakref" ;;
     production|stable|prod)
-        CHANNEL="production"; FLATPAK_BRANCH="stable"; SUBDIR="stable" ;;
+        CHANNEL="production"; FLATPAK_BRANCH="stable"; SUBDIR="stable"
+        REF_FILE="com.allow2.allow2linux.flatpakref" ;;
     *)
         echo "Usage: $0 <staging|production>" >&2
         echo "  staging    → beta branch   → /steamdeck/staging/ (internal testers)" >&2
@@ -91,11 +95,11 @@ echo "    target  : ${PUBLIC_URL}/  (bucket prefix: ${PREFIX}/${SUBDIR}/)"
 require flatpak-builder
 
 # ── 0. Bake the channel-specific launcher (env + vid/token) ──────────────────
-echo "==> [0/5] gen-launcher.sh (channel=${CHANNEL})"
+echo "==> [0/6] gen-launcher.sh (channel=${CHANNEL})"
 CHANNEL="${CHANNEL}" "${PROJECT_ROOT}/flatpak/gen-launcher.sh"
 
 # ── 1 + 2. Build, export to the channel's ostree repo, refresh summary ───────
-echo "==> [1/5] flatpak-builder (build + export to repo-${SUBDIR}/, branch=${FLATPAK_BRANCH})"
+echo "==> [1/6] flatpak-builder (build + export to repo-${SUBDIR}/, branch=${FLATPAK_BRANCH})"
 flatpak-builder \
     --force-clean \
     --default-branch="${FLATPAK_BRANCH}" \
@@ -103,13 +107,13 @@ flatpak-builder \
     "${BUILD_DIR}" \
     "${MANIFEST}"
 
-echo "==> [2/5] flatpak build-update-repo (regenerate summary + metadata)"
+echo "==> [2/6] flatpak build-update-repo (regenerate summary + metadata)"
 # Regenerates `summary` (+ `summary.sig` if signing). Testers can never see a
 # new commit until the summary is refreshed AND its cache is purged (step 5).
 flatpak build-update-repo --generate-static-deltas --prune "${REPO_DIR}"
 
 # ── 3. Sync repo/ to Cloudflare R2 under the channel's prefix ────────────────
-echo "==> [3/5] sync repo-${SUBDIR}/ -> R2 (${SYNC_TOOL})"
+echo "==> [3/6] sync repo-${SUBDIR}/ -> R2 (${SYNC_TOOL})"
 need_env R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
@@ -136,13 +140,52 @@ else
         --no-progress
 fi
 
-# ── 4. Purge the Cloudflare cache for THIS prefix's ostree metadata ──────────
+# ── 4. Publish the one-click .flatpakref + the static install page ───────────
+# These sit in the SAME prefix as the ostree repo, so they MUST be uploaded
+# AFTER the `--delete` sync above (which would otherwise remove them). On the
+# next run the sync deletes them and this step re-uploads — idempotent.
+#   /steamdeck/<channel>/<ref>          one-click install (Content-Type flatpak.ref)
+#   /steamdeck/<channel>/index.html     the install walkthrough (text/html)
+echo "==> [4/6] publish ${REF_FILE} + install page -> R2 (${SYNC_TOOL})"
+
+# Generate the channel's install page (baked URLs/labels; staging=internal-only).
+# gen-install-page.sh takes the BASE url and appends /<subdir>/<ref> itself, so
+# pass PUBLIC_URL_BASE (not the subdir-suffixed PUBLIC_URL used for purging).
+INSTALL_PAGE="${PROJECT_ROOT}/flatpak/install-page-${SUBDIR}.html"
+PUBLIC_URL="${PUBLIC_URL_BASE}" APP_ID="${APP_ID}" \
+    "${PROJECT_ROOT}/flatpak/gen-install-page.sh" "${CHANNEL}" "${INSTALL_PAGE}"
+
+REF_SRC="${PROJECT_ROOT}/${REF_FILE}"
+[ -f "${REF_SRC}" ] || { echo "ERROR: ${REF_SRC} not found"; exit 1; }
+
+# Upload one file to the channel prefix with an explicit Content-Type, honouring
+# SYNC_TOOL (creds already exported by the sync step above).
+r2_put() {  # r2_put <local-file> <dest-key> <content-type>
+    local src="$1" key="$2" ctype="$3"
+    if [ "${SYNC_TOOL}" = "rclone" ]; then
+        rclone copyto "${src}" "r2beta:${R2_BUCKET}/${key}" \
+            --header-upload "Content-Type: ${ctype}"
+    else
+        aws s3 cp "${src}" "s3://${R2_BUCKET}/${key}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --checksum-algorithm CRC32 \
+            --content-type "${ctype}" \
+            --no-progress
+    fi
+}
+
+r2_put "${REF_SRC}"      "${PREFIX}/${SUBDIR}/${REF_FILE}" "application/vnd.flatpak.ref"
+r2_put "${INSTALL_PAGE}" "${PREFIX}/${SUBDIR}/index.html"  "text/html"
+echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html"
+
+# ── 5. Purge the Cloudflare cache for THIS prefix's ostree metadata + pages ──
 # The .tgz objects are content-addressed (immutable) so caching them is fine,
 # but `summary`, `summary.sig` and `config` change every publish. If they are
 # served stale, clients never see the new commit. A Cache Rule that BYPASSES
 # cache for */<channel>/summary* is the durable fix (see BETA_DELIVERY.md); this
-# purge is the belt-and-braces on top.
-echo "==> [4/5] purge Cloudflare cache for ${SUBDIR}/ ostree metadata"
+# purge is the belt-and-braces on top. We also purge the .flatpakref + index.html
+# so a re-publish is picked up immediately.
+echo "==> [5/6] purge Cloudflare cache for ${SUBDIR}/ ostree metadata + install page"
 if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
     require curl
     PURGE_FILES=$(cat <<JSON
@@ -150,7 +193,9 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
   "${PUBLIC_URL}/summary",
   "${PUBLIC_URL}/summary.sig",
   "${PUBLIC_URL}/summary.idx",
-  "${PUBLIC_URL}/config"
+  "${PUBLIC_URL}/config",
+  "${PUBLIC_URL}/index.html",
+  "${PUBLIC_URL}/${REF_FILE}"
 ]}
 JSON
 )
@@ -159,14 +204,16 @@ JSON
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
         --data "${PURGE_FILES}" >/dev/null
-    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config"
+    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + ${REF_FILE}"
 else
     echo "    SKIPPED — set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID to auto-purge."
     echo "    Until then, testers may see stale metadata until the CDN TTL expires."
 fi
 
 echo ""
-echo "==> [5/5] Published ${CHANNEL} → ${PUBLIC_URL}/"
+echo "==> [6/6] Published ${CHANNEL} → ${PUBLIC_URL}/"
+echo "    One-click install:  ${PUBLIC_URL}/${REF_FILE}"
+echo "    Install page:       ${PUBLIC_URL}/  (index.html)"
 echo "    Users update with:  flatpak update -y ${APP_ID}"
 if [ "${CHANNEL}" = "staging" ]; then
     echo "    First-time install:  com.allow2.allow2linux-beta.flatpakref  (Branch=beta)"

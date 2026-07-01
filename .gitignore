@@ -29,6 +29,8 @@ flatpak/*.flatpak
 flatpak/**/node-sources.json
 # Generated per-channel by gen-launcher.sh (staging=beta / production=stable)
 flatpak/allow2linux.launcher.sh
+# Generated per-channel by gen-install-page.sh (published as index.html)
+flatpak/install-page-*.html
 
 # Snap build
 snap/*.snap
