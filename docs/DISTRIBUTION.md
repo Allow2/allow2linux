@@ -76,16 +76,18 @@ No Flatpak-style auto-update timer — deb/rpm updates come through apt/dnf.
 
 Runtime deps declared: `nodejs ≥18`, SDL2 + SDL2_ttf + libX11 (distro-named).
 
-> **[production-lock gap — FLAGGED]** On first launch the daemon's `first-run.js`
-> writes a **per-user** copy of the unit to `~/.config/systemd/user/` with a
-> node-direct `ExecStart` that does **not** re-export `ALLOW2_PRODUCTION`.
-> `index.js` already defaults to the production vid/token, so the daemon still
-> talks to production by default; the residual is that a user who sets
-> `ALLOW2_ENV=staging` could reattach. Fully closing the lock for **packaged**
-> installs needs a small `first-run.js` change (detect `/usr/bin/allow2linux` and
-> use it as `ExecStart`, or copy the shipped unit verbatim). This touches shared
-> daemon code — **flagged for a design decision, not silently changed.**
-> `install.sh` sidesteps this cleanly via the first-run marker.
+> **[production-lock — CLOSED]** On first launch the daemon's `first-run.js`
+> writes a **per-user** copy of the unit to `~/.config/systemd/user/`, which
+> **shadows** the shipped `/usr/lib/systemd/user/` unit (the user-config unit
+> path outranks `/usr/lib`). For a **packaged prod install** `first-run.js` now
+> detects it (`/usr/bin/allow2linux` present **and** the daemon running from
+> `/usr/…`) and sets that per-user `ExecStart` to `/usr/bin/allow2linux` — the
+> production-locked launcher that bakes `ALLOW2_PRODUCTION=1`. So a packaged
+> install's effective unit **always** re-exports the prod flag and
+> `ALLOW2_ENV=staging` can **never** reattach it to staging. Flatpak first-run is
+> unchanged (its unit runs `flatpak run …`, launcher bakes the flags); the
+> dev/direct install keeps its node-direct `ExecStart`; `install.sh` still
+> sidesteps first-run entirely via the pre-set marker.
 
 ---
 

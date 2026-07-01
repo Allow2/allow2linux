@@ -30,6 +30,31 @@ import { fileURLToPath } from 'node:url';
 
 const MARKER = join(homedir(), '.allow2', '.setup-done');
 
+// The deb/rpm packages ship a production-locked launcher here (bakes
+// ALLOW2_PRODUCTION=1) and install their daemon under /usr/lib/allow2linux.
+const PACKAGED_LAUNCHER = '/usr/bin/allow2linux';
+
+/**
+ * Is this daemon the deb/rpm PACKAGED PRODUCTION install?
+ *
+ * True only when BOTH hold: the production-locked launcher exists at
+ * /usr/bin/allow2linux, AND we are running from the system prefix (this file
+ * lives under /usr/…, i.e. /usr/lib/allow2linux/src). Requiring both avoids a
+ * false positive on a dev checkout that merely happens to have a stale
+ * /usr/bin/allow2linux from a previous package install. The curl|bash install
+ * (install.sh) is unaffected: its launcher lives under the user data dir, not
+ * /usr/bin, and it pre-sets the first-run marker so this code never runs.
+ *
+ * @param {string} hereDir directory of this module (…/src)
+ */
+function _isPackagedProdInstall(hereDir) {
+    try {
+        return existsSync(PACKAGED_LAUNCHER) && hereDir.startsWith('/usr/');
+    } catch (_e) {
+        return false;
+    }
+}
+
 function _run(command, args) {
     return new Promise(function (resolve) {
         execFile(command, args, { timeout: 15000 }, function (err, stdout, stderr) {
@@ -61,14 +86,23 @@ function _hostRunner() {
  */
 function _unitContents() {
     const flatpakId = process.env.FLATPAK_ID || 'com.allow2.allow2linux';
+    const here = dirname(fileURLToPath(import.meta.url)); // .../src
     let execStart;
     if (_inFlatpak()) {
+        // Flatpak: the app's own launcher (inside the sandbox) bakes the prod
+        // flags; the unit just re-launches the flatpak app. UNCHANGED.
         execStart = '/usr/bin/flatpak run ' + flatpakId;
+    } else if (_isPackagedProdInstall(here)) {
+        // deb/rpm PACKAGED PRODUCTION install: point the per-user unit at the
+        // production-locked launcher (/usr/bin/allow2linux), which bakes
+        // ALLOW2_PRODUCTION=1. A node-direct ExecStart here would DROP that flag
+        // and let ALLOW2_ENV=staging reattach the "production" install to
+        // staging — the production-lock gap. Using the launcher closes it.
+        execStart = PACKAGED_LAUNCHER;
     } else {
-        // Resolve the actual node binary + this package's entry point so the
-        // dev/direct install has a correct ExecStart (no hardcoded ~/.allow2).
+        // Dev/direct install: resolve the actual node binary + this package's
+        // entry point so the ExecStart is correct (no hardcoded ~/.allow2).
         const nodeBin = process.execPath;
-        const here = dirname(fileURLToPath(import.meta.url)); // .../src
         const indexJs = join(here, 'index.js');
         execStart = nodeBin + ' ' + indexJs;
     }
