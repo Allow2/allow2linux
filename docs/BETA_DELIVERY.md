@@ -172,12 +172,23 @@ export ALLOW2_FLATPAK_GPG_HOMEDIR="$HOME/.allow2-flatpak-gpg"
   every installer. Public keys are safe to publish — that is their whole purpose.
 - **Same key for both channels** is fine (staging + production can share one
   signing key); use separate keys only if you want independent trust roots.
-- **In CI:** provide the private key as an encrypted **Secret** (e.g. an
-  ASCII-armored export imported into a throwaway `--homedir` at job start), set
-  `ALLOW2_FLATPAK_GPG_KEYID` (and `ALLOW2_FLATPAK_GPG_HOMEDIR`) for the job, and
-  use a passphrase-protected key with the passphrase supplied via
-  `gpg-preset-passphrase` / a loopback pinentry. Never bake the private key into
-  the repo or an image layer.
+- **In CI:** use a **passphraseless dedicated** signing key (single-purpose and
+  revocable — the GitHub Secret encryption is the protection, so no passphrase is
+  needed). Provide it as two repo **Actions secrets**:
+  - `ALLOW2_FLATPAK_GPG_PRIVATE_KEY` — the ASCII-armored **private** key export:
+    ```bash
+    gpg --homedir "$ALLOW2_FLATPAK_GPG_HOMEDIR" --armor --export-secret-keys <keyid>
+    ```
+    (generate it with `%no-protection`, as in the batch keydef above).
+  - `ALLOW2_FLATPAK_GPG_KEYID` — the key id / uid / fingerprint (e.g. `ops@allow2.com`).
+
+  The `.github/workflows/publish.yml` **"Import Flatpak signing key"** step (runs
+  before Build + publish) imports that armored key into a throwaway
+  `$RUNNER_TEMP/flatpak-gpg` homedir, verifies a secret key landed, then exports
+  `ALLOW2_FLATPAK_GPG_HOMEDIR` + `ALLOW2_FLATPAK_GPG_KEYID` via `$GITHUB_ENV` so
+  `publish.sh` picks them up. A passphraseless key needs no `gpg-preset-passphrase`
+  / loopback-pinentry wiring. Never bake the private key into the repo or an image
+  layer — it lives only as the encrypted Secret.
 
 ### vid/token (CI **Variables**, NOT Secrets)
 

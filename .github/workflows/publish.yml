@@ -11,6 +11,9 @@ name: Publish (Flatpak → R2)
 # Secrets (repo/org settings → Actions → Secrets):
 #   R2_ACCOUNT_ID  R2_BUCKET  R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY
 #   CLOUDFLARE_API_TOKEN  CLOUDFLARE_ZONE_ID
+#   ALLOW2_FLATPAK_GPG_PRIVATE_KEY  (armored private key of the dedicated,
+#                                    passphraseless Flatpak signing key)
+#   ALLOW2_FLATPAK_GPG_KEYID        (key id / uid / fingerprint, e.g. ops@allow2.com)
 #
 # Variables (repo/org settings → Actions → Variables — NOT Secrets; vid/token are
 # type identifiers, not secrets):
@@ -77,6 +80,51 @@ jobs:
           sudo flatpak install -y flathub \
             org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
 
+      - name: Import Flatpak signing key
+        # Provisions the GPG signing key publish.sh requires. A fresh ubuntu-latest
+        # runner has NO key, so without this step publish.sh aborts with
+        # "ALLOW2_FLATPAK_GPG_KEYID is not set". We import a passphraseless dedicated
+        # signing key (armored private export held as a Secret) into a throwaway
+        # keyring under $RUNNER_TEMP, then hand the keyid + homedir to publish.sh via
+        # $GITHUB_ENV. Passphraseless ⇒ no pinentry/agent-preset wiring is needed.
+        # See docs/BETA_DELIVERY.md "Operator setup".
+        env:
+          ALLOW2_FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.ALLOW2_FLATPAK_GPG_PRIVATE_KEY }}
+          ALLOW2_FLATPAK_GPG_KEYID:        ${{ secrets.ALLOW2_FLATPAK_GPG_KEYID }}
+        run: |
+          set -euo pipefail
+          # Fail EARLY with a pointed message rather than falling through to
+          # publish.sh's generic "keyid not set" error.
+          if [ -z "${ALLOW2_FLATPAK_GPG_PRIVATE_KEY}" ] || [ -z "${ALLOW2_FLATPAK_GPG_KEYID}" ]; then
+            echo "ERROR: Flatpak signing secrets are missing." >&2
+            echo "  Set BOTH repo Actions secrets:" >&2
+            echo "    ALLOW2_FLATPAK_GPG_PRIVATE_KEY  (ASCII-armored export of the" >&2
+            echo "                                     passphraseless signing key)" >&2
+            echo "    ALLOW2_FLATPAK_GPG_KEYID        (key id / uid / fingerprint)" >&2
+            echo "  See docs/BETA_DELIVERY.md 'Operator setup'." >&2
+            exit 1
+          fi
+          # Throwaway keyring home, isolated from any default ~/.gnupg.
+          HOME_DIR="${RUNNER_TEMP}/flatpak-gpg"
+          mkdir -p "${HOME_DIR}"
+          chmod 700 "${HOME_DIR}"
+          # printf '%s' (not echo) preserves the multiline armor exactly; quoting the
+          # var keeps newlines intact.
+          printf '%s' "${ALLOW2_FLATPAK_GPG_PRIVATE_KEY}" \
+            | gpg --homedir "${HOME_DIR}" --batch --import
+          # Verify a SECRET key actually landed — a bad/empty armor imports nothing.
+          if ! gpg --homedir "${HOME_DIR}" --list-secret-keys --keyid-format=long | grep -q '^sec'; then
+            echo "ERROR: no secret key was imported into ${HOME_DIR}." >&2
+            echo "  ALLOW2_FLATPAK_GPG_PRIVATE_KEY must be a valid armored private-key" >&2
+            echo "  export: gpg --homedir <dir> --armor --export-secret-keys <keyid>." >&2
+            echo "  See docs/BETA_DELIVERY.md 'Operator setup'." >&2
+            exit 1
+          fi
+          # Hand the signing inputs to publish.sh (and the Build step) via the job env.
+          echo "ALLOW2_FLATPAK_GPG_HOMEDIR=${HOME_DIR}" >> "$GITHUB_ENV"
+          echo "ALLOW2_FLATPAK_GPG_KEYID=${ALLOW2_FLATPAK_GPG_KEYID}" >> "$GITHUB_ENV"
+          echo "==> imported Flatpak signing key (keyid=${ALLOW2_FLATPAK_GPG_KEYID}, homedir=${HOME_DIR})"
+
       - name: Build + publish
         env:
           # R2 + Cloudflare (Secrets)
@@ -93,6 +141,11 @@ jobs:
           ALLOW2_PROD_VID:      ${{ vars.ALLOW2_PROD_VID }}
           ALLOW2_PROD_TOKEN:    ${{ vars.ALLOW2_PROD_TOKEN }}
           ALLOW2_VERSION:       ${{ steps.chan.outputs.version }}
+          # GPG signing — the "Import Flatpak signing key" step above wrote these to
+          # $GITHUB_ENV, so they already inherit here; re-declaring them from the env
+          # context is self-documenting (and harmless — same values, no conflict).
+          ALLOW2_FLATPAK_GPG_KEYID:   ${{ env.ALLOW2_FLATPAK_GPG_KEYID }}
+          ALLOW2_FLATPAK_GPG_HOMEDIR: ${{ env.ALLOW2_FLATPAK_GPG_HOMEDIR }}
         run: |
           chmod +x scripts/publish.sh flatpak/gen-launcher.sh
           ./scripts/publish.sh "${{ steps.chan.outputs.channel }}"
