@@ -125,6 +125,24 @@ jobs:
           echo "ALLOW2_FLATPAK_GPG_KEYID=${ALLOW2_FLATPAK_GPG_KEYID}" >> "$GITHUB_ENV"
           echo "==> imported Flatpak signing key (keyid=${ALLOW2_FLATPAK_GPG_KEYID}, homedir=${HOME_DIR})"
 
+      - name: Cache flatpak-builder state (ccache + downloaded/cloned sources + per-module results)
+        # publish.sh runs `flatpak-builder` from the repo root and passes NO
+        # --state-dir, so flatpak-builder uses its default `.flatpak-builder/` in
+        # the working directory (= $GITHUB_WORKSPACE). That dir holds the ccache,
+        # the downloaded/cloned module sources, and cached per-module build results
+        # — the expensive part of a rebuild. --force-clean only wipes the app
+        # build dir (flatpak/build-<subdir>/), never this cache, so caching it is
+        # safe. This is an optimization only: a cache miss still builds correctly.
+        # Key on flatpak/** (the manifest + build inputs); restore-keys give partial
+        # reuse from any prior cache — safe because flatpak-builder re-validates
+        # every source against its sha256/checksum before reusing it.
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-builder-${{ runner.os }}-${{ hashFiles('flatpak/**') }}
+          restore-keys: |
+            flatpak-builder-${{ runner.os }}-
+
       - name: Build + publish
         env:
           # R2 + Cloudflare (Secrets)
