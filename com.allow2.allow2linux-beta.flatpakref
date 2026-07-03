@@ -5,6 +5,12 @@ Branch=beta
 Url=https://get.allow2.com/steamdeck/staging/
 RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
 IsRuntime=false
+# GPGKey= injected at publish time by scripts/publish.sh (do NOT hardcode a key
+# here — the placeholder line below is replaced with the base64 public key of
+# ALLOW2_FLATPAK_GPG_KEYID in the copy uploaded to R2). Keep this line present so
+# the structure is obvious; the committed value stays empty (public key only ever
+# lands in the PUBLISHED ref, never in git).
+GPGKey=
 # INTERNAL BETA / STAGING channel — for the internal tester ONLY.
 #
 # This build's launcher DELIBERATELY targets STAGING: it bakes ALLOW2_ENV=staging
@@ -23,6 +29,9 @@ IsRuntime=false
 # remote points at the staging R2 prefix and installs the beta build. Subsequent
 # `flatpak update` (and the auto-update timer) pull new betas from the same URL.
 #
-# NOTE: no GPGKey line => this beta remote is added with gpg-verify=false. That is
-# acceptable for a small INTERNAL tester group over HTTPS. Sign the ostree repo
-# for any wider rollout.
+# SIGNING: the staging ostree repo is GPG-signed (publish.sh passes --gpg-sign to
+# both flatpak-builder and build-update-repo). The matching public key is injected
+# into the GPGKey= line above at publish time from ALLOW2_FLATPAK_GPG_KEYID, so the
+# remote is added with gpg-verify=TRUE. This is REQUIRED, not optional: without a
+# GPGKey `flatpak install --from <ref>` refuses the repo ("Can't pull from
+# untrusted non-gpg verified remote") — even for a single internal tester.

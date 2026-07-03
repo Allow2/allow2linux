@@ -73,8 +73,8 @@ if [ "${IS_STAGING}" -eq 1 ]; then
   SECURITY_BANNER='<div class="callout bad">
     <p style="margin:0"><strong>INTERNAL BETA (staging). For the internal tester only.</strong>
     This hardening guide accompanies the beta build that targets
-    <code>staging-api.allow2.com</code> and is unsigned
-    (<code>gpg-verify=false</code> over HTTPS). Do not share this page or link,
+    <code>staging-api.allow2.com</code>. The repo is GPG-signed and served
+    over HTTPS. Do not share this page or link,
     and never promote it to the stable/public channel.</p>
   </div>'
   # Staging-only internal pointer to the sourced notes + coverage matrix.

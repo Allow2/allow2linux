@@ -5,6 +5,12 @@ Branch=stable
 Url=https://get.allow2.com/steamdeck/stable/
 RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
 IsRuntime=false
+# GPGKey= injected at publish time by scripts/publish.sh (do NOT hardcode a key
+# here — the placeholder line below is replaced with the base64 public key of
+# ALLOW2_FLATPAK_GPG_KEYID in the copy uploaded to R2). Keep this line present so
+# the structure is obvious; the committed value stays empty (public key only ever
+# lands in the PUBLISHED ref, never in git).
+GPGKey=
 # STABLE / PRODUCTION channel. The launcher baked into this build is
 # production-locked (ALLOW2_PRODUCTION=1 + NODE_ENV=production) so the Allow2 SDK
 # can NEVER attach to staging. Published by:  ./scripts/publish.sh production
@@ -17,7 +23,9 @@ IsRuntime=false
 #
 # For the INTERNAL BETA (staging) build, use com.allow2.allow2linux-beta.flatpakref.
 #
-# NOTE: no GPGKey line => this remote is added with gpg-verify=false (acceptable
-# over HTTPS for now). For a wider public rollout, sign the ostree repo
-# (flatpak build-sign / --gpg-sign) and paste the base64 public key here as
-# `GPGKey=...`.
+# SIGNING: the stable ostree repo is GPG-signed (publish.sh passes --gpg-sign to
+# both flatpak-builder and build-update-repo). The matching public key is injected
+# into the GPGKey= line above at publish time from ALLOW2_FLATPAK_GPG_KEYID, so the
+# remote is added with gpg-verify=TRUE. This is REQUIRED, not optional: without a
+# GPGKey `flatpak install --from <ref>` refuses the repo ("Can't pull from
+# untrusted non-gpg verified remote").

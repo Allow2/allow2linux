@@ -100,6 +100,85 @@ Local `.env`-less builds work: `gen-launcher.sh` defaults to the known type ids
 
 The R2 S3 endpoint is `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com`.
 
+### GPG signing — REQUIRED (not optional)
+
+`flatpak install --from <ref>` **refuses an unsigned repo**: `Can't pull from
+untrusted non-gpg verified remote`. This is not a "wider rollout" nicety — even a
+single internal tester installing via the one-click `.flatpakref` needs the repo
+signed and the ref carrying the public key. So **every real publish must be
+signed**. `publish.sh` will **fail loudly** if `ALLOW2_FLATPAK_GPG_KEYID` is unset
+(the only way past that is the explicit `ALLOW2_FLATPAK_ALLOW_UNSIGNED=1` dry-run
+escape hatch, which produces an intentionally uninstallable channel).
+
+What `publish.sh` does with the key:
+
+- passes `--gpg-sign=<keyid> [--gpg-homedir=<dir>]` to **both** `flatpak-builder`
+  (signs the exported ostree **objects/commit**) **and** `flatpak build-update-repo`
+  (signs the **`summary`** → writes `summary.sig`). Both must be signed by the same
+  key or the client rejects the repo.
+- exports the key's **public** part (`gpg --export | base64 -w0`) and injects it as
+  a `GPGKey=` line into the **published** copy of the channel's `.flatpakref` (the
+  copy uploaded to R2). The committed source ref keeps an empty `GPGKey=`
+  placeholder; the real key never touches git.
+
+#### Operator setup (do this ONCE)
+
+Generate a **dedicated** Flatpak signing key (do not reuse a personal/identity
+key). A dedicated GnuPG home keeps it isolated from `~/.gnupg`:
+
+```bash
+# 1. Pick an isolated keyring home for the signing key (keep this dir SECRET).
+export ALLOW2_FLATPAK_GPG_HOMEDIR="$HOME/.allow2-flatpak-gpg"
+mkdir -p "$ALLOW2_FLATPAK_GPG_HOMEDIR" && chmod 700 "$ALLOW2_FLATPAK_GPG_HOMEDIR"
+
+# 2a. Interactive generation:
+gpg --homedir "$ALLOW2_FLATPAK_GPG_HOMEDIR" --full-generate-key
+#     Choose: (1) RSA and RSA (or ECC/ed25519), 4096 bits, no expiry (or a long
+#     one you commit to rotating), a clear uid like "Allow2 Flatpak Signing
+#     <ops@allow2.com>", and a strong passphrase.
+
+# 2b. …or unattended via a batch keydef:
+cat > /tmp/allow2-flatpak-keydef <<'KEYDEF'
+%no-protection
+Key-Type: RSA
+Key-Length: 4096
+Name-Real: Allow2 Flatpak Signing
+Name-Email: ops@allow2.com
+Expire-Date: 0
+%commit
+KEYDEF
+gpg --homedir "$ALLOW2_FLATPAK_GPG_HOMEDIR" --batch --generate-key /tmp/allow2-flatpak-keydef
+rm -f /tmp/allow2-flatpak-keydef   # (CI: use a passphrase-protected key instead of %no-protection)
+
+# 3. Find the key id / fingerprint to use as ALLOW2_FLATPAK_GPG_KEYID:
+gpg --homedir "$ALLOW2_FLATPAK_GPG_HOMEDIR" --list-keys --keyid-format=long
+export ALLOW2_FLATPAK_GPG_KEYID="ops@allow2.com"   # uid, long keyid, or fingerprint all work
+```
+
+Then every publish just needs those two env vars exported:
+
+```bash
+export ALLOW2_FLATPAK_GPG_KEYID="ops@allow2.com"
+export ALLOW2_FLATPAK_GPG_HOMEDIR="$HOME/.allow2-flatpak-gpg"
+./scripts/publish.sh staging
+```
+
+**Key handling:**
+
+- The **private** key is an operator secret. Keep it in the dedicated GnuPG home
+  (or a secrets manager / CI encrypted file) and **NEVER commit it to git**. Back
+  it up securely — losing it means clients must re-trust a new key.
+- The **public** key is what lands in the flatpakref (`GPGKey=`) and is served to
+  every installer. Public keys are safe to publish — that is their whole purpose.
+- **Same key for both channels** is fine (staging + production can share one
+  signing key); use separate keys only if you want independent trust roots.
+- **In CI:** provide the private key as an encrypted **Secret** (e.g. an
+  ASCII-armored export imported into a throwaway `--homedir` at job start), set
+  `ALLOW2_FLATPAK_GPG_KEYID` (and `ALLOW2_FLATPAK_GPG_HOMEDIR`) for the job, and
+  use a passphrase-protected key with the passphrase supplied via
+  `gpg-preset-passphrase` / a loopback pinentry. Never bake the private key into
+  the repo or an image layer.
+
 ### vid/token (CI **Variables**, NOT Secrets)
 
 vid/token are **type identifiers** (which integration this is), not secrets — put
@@ -188,8 +267,11 @@ On the Deck, in **Desktop Mode**:
    flatpak install --from com.allow2.allow2linux-beta.flatpakref
    ```
    This adds the staging remote (`https://get.allow2.com/steamdeck/staging/`,
-   `Branch=beta`) and installs the beta. The remote is `gpg-verify=false` (unsigned
-   over HTTPS — fine for internal testers; sign for a wider rollout).
+   `Branch=beta`) and installs the beta. The remote is added with
+   **`gpg-verify=true`**: the repo is GPG-signed and the ref carries the matching
+   public key (`GPGKey=`, injected at publish time). Signing is **required** —
+   `flatpak install --from <ref>` refuses an unsigned repo ("Can't pull from
+   untrusted non-gpg verified remote"), even for a single internal tester.
 2. **Launch + pair** — run the app; it shows the pairing screen. In the Allow2
    parent app, scan the **QR** (or enter the **6-digit PIN**). Pair the child.
 3. **Verify the service + linger** — the daemon auto-installs its `systemd --user`

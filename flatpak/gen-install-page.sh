@@ -74,8 +74,8 @@ if [ "${IS_STAGING}" -eq 1 ]; then
   PAGE_TITLE="Allow2 Parental Freedom: Internal Beta (staging) install"
   SECURITY_BANNER='<div class="banner beta">
       <strong>INTERNAL BETA (staging). For the internal tester only.</strong>
-      This build targets <code>staging-api.allow2.com</code> and is unsigned
-      (<code>gpg-verify=false</code> over HTTPS). Do not share this page or link,
+      This build targets <code>staging-api.allow2.com</code>. The repo is
+      GPG-signed and served over HTTPS. Do not share this page or link,
       and never promote this build to the stable/public channel.
     </div>'
   # Staging page NEVER advertises or links the public/stable channel.
