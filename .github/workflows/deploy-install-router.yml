@@ -1,11 +1,15 @@
 name: Deploy install-router (Cloudflare Worker)
 
-# Deploys the get.allow2.com/install Worker (workers/install-router) to
-# Cloudflare. The Worker is data-driven — per-platform install URLs live in R2
-# manifests, not in the Worker — so this pipeline only ships the routing logic.
+# Deploys the install-funnel Worker (workers/install-router) to Cloudflare. The
+# Worker is data-driven — per-platform install URLs live in R2 manifests, not in
+# the Worker — so this pipeline only ships the routing logic. It is CO-HOSTED as
+# a staging+prod pair on get.allow2.com (two envs of the same code).
 #
-#   push to the default branch → deploy --env production (binds the route)
-#   pull_request               → deploy --env production --dry-run (validate only)
+# Branch → env (ecosystem convention; the old default branch is being retired —
+# only `staging` and `main` drive deploys):
+#   push to `main`    → deploy --env production  (route get.allow2.com/install, stable, indexable)
+#   push to `staging` → deploy --env staging     (route get.allow2.com/staging, staging pages, noindex)
+#   pull_request      → deploy --env production --dry-run (validate only, nothing published)
 #
 # ── Secrets (repo/org settings → Actions → Secrets) ──────────────────────────
 #   CF_WORKERS_API_TOKEN     Cloudflare API token for Workers deploys. Create it
@@ -22,7 +26,7 @@ name: Deploy install-router (Cloudflare Worker)
 
 on:
   push:
-    branches: [master]            # the repo default branch (origin/HEAD)
+    branches: [staging, main]     # staging → staging env, main → production env
     paths:
       - 'workers/install-router/**'
   pull_request:
@@ -35,18 +39,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy (push) / validate (PR)
-        # wrangler-action@v3 is PINNED deliberately: v4 defaults to Wrangler 4,
-        # a major bump we are NOT adopting here. Staying on v3 + an explicit
-        # Wrangler 3 version keeps the deploy reproducible.
+      # Separate, if:-gated steps per target (clearer than one nested expression).
+      # wrangler-action@v3 is PINNED deliberately: v4 defaults to Wrangler 4, a
+      # major bump we are NOT adopting here. Staying on v3 + an explicit Wrangler
+      # 3 version keeps the deploy reproducible.
+
+      - name: Deploy production (push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/install-router
           wranglerVersion: '3.90.0'
-          # On PRs, validate only (no route claimed, nothing published). On a push
-          # to the default branch, do the real deploy which binds the production
-          # route (get.allow2.com/install) per wrangler.toml [env.production].
-          command: >-
-            deploy --env production${{ github.event_name == 'pull_request' && ' --dry-run' || '' }}
+          # Real deploy: binds the production route get.allow2.com/install
+          # (stable pages, indexable) per wrangler.toml [env.production].
+          command: deploy --env production
+
+      - name: Deploy staging (push to staging)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/install-router
+          wranglerVersion: '3.90.0'
+          # Real deploy: binds the staging route get.allow2.com/staging
+          # (staging pages, noindex) per wrangler.toml [env.staging].
+          command: deploy --env staging
+
+      - name: Validate (pull_request, dry-run)
+        if: github.event_name == 'pull_request'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/install-router
+          wranglerVersion: '3.90.0'
+          # Validate only — no route claimed, nothing published.
+          command: deploy --env production --dry-run

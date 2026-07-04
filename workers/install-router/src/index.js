@@ -9,10 +9,22 @@
 //
 // Dependency-free Cloudflare Worker (ES module format).
 //
+// CO-HOSTED STAGING + PRODUCTION (same code, two envs):
+// The SAME Worker source powers TWO environments, co-hosted on get.allow2.com,
+// exactly like get.allow2.com already co-hosts steamdeck/stable + steamdeck/staging:
+//   • production — route get.allow2.com/install  → STABLE install pages,
+//       manifests at get.allow2.com/install/<platform>.json, indexable.
+//   • staging    — route get.allow2.com/staging  → STAGING install pages,
+//       manifests at get.allow2.com/staging/install/<platform>.json, noindex.
+// The per-env behaviour is NOT hardcoded — it is read from the wrangler
+// `[env.<name>.vars]` binding (the fetch handler receives `env`). See config().
+//
 // DATA-DRIVEN TARGETS (this is the important part):
 // The per-platform install URLs are NOT baked into this Worker. At request time
-// the Worker fetches a tiny per-platform manifest from R2 —
+// the Worker fetches a tiny per-platform manifest from R2 — for prod
 //   https://get.allow2.com/install/<platform>.json
+// and for staging
+//   https://get.allow2.com/staging/install/<platform>.json
 // — edge-cached for 5 minutes, and 302s to that manifest's `.url`. Each platform
 // repo publishes its OWN manifest from its OWN release pipeline (the Steam Deck
 // one is written by scripts/publish.sh in this repo). Shipping a new install
@@ -45,12 +57,50 @@
 // here + shipping its manifest — no URL ever lives in this file.
 const KNOWN_PLATFORMS = ["steamdeck", "windows", "mac", "android"];
 
-// Base for the per-platform manifests in R2 (served via get.allow2.com).
-const MANIFEST_BASE = "https://get.allow2.com/install";
-
 // FAIL-SAFE fallback. If a manifest is missing / errors / is malformed, redirect
-// here instead of dead-ending or throwing. Never leave the user stranded.
+// here instead of dead-ending or throwing. Never leave the user stranded. This
+// is the ONE truly hardcoded target: an always-safe, always-live URL that can
+// never be misconfigured by an env var.
 const DEFAULT_URL = "https://allow2.com/";
+
+// ---------------------------------------------------------------------------
+// Per-environment configuration — the channel/prod-vs-staging knobs.
+//
+// Sourced from the wrangler `[env.<name>.vars]` binding (the fetch handler is
+// passed `env`). NOTHING stable/prod-specific is hardcoded here: the two
+// co-hosted envs differ ONLY by these vars.
+//   CHANNEL         "stable" (prod) | "staging"        — informational tag.
+//   MANIFEST_BASE   base for per-platform manifest fetch
+//                     prod    https://get.allow2.com/install
+//                     staging https://get.allow2.com/staging/install
+//   DEFAULT_INSTALL channel-appropriate Steam Deck install page — the fail-safe
+//                   target for the deck (the primary Linux target) when its
+//                   manifest can't be read.
+//                     prod    https://get.allow2.com/steamdeck/stable/
+//                     staging https://get.allow2.com/steamdeck/staging/
+//   NOINDEX         "1" on staging → emit X-Robots-Tag: noindex, nofollow on
+//                   EVERY response; falsy/omitted on prod → never emit it.
+//
+// Every default below is PROD-SAFE (stable pages, NOT noindex). A mis-set or
+// missing env therefore fails toward production behaviour — it can never
+// accidentally deindex prod or point prod at staging pages.
+function config(env) {
+  const e = env || {};
+  return {
+    channel: e.CHANNEL || "stable",
+    manifestBase: e.MANIFEST_BASE || "https://get.allow2.com/install",
+    defaultInstall: e.DEFAULT_INSTALL || "https://get.allow2.com/steamdeck/stable/",
+    // Truthy only for an explicit opt-in ("1"/"true"). "" / "0" / unset → false.
+    noindex: e.NOINDEX === "1" || e.NOINDEX === "true",
+  };
+}
+
+// The X-Robots-Tag header, added to EVERY response in a noindex (staging) env
+// and NEVER in prod. Returned as a spreadable object so each Response builder
+// just `...noindexHeader(cfg)` into its headers.
+function noindexHeader(cfg) {
+  return cfg.noindex ? { "X-Robots-Tag": "noindex, nofollow" } : {};
+}
 
 // Built-in chooser labels — used ONLY when a manifest omits label/sub (or can't
 // be fetched). The manifest's label/sub win when present.
@@ -122,10 +172,10 @@ function detectPlatform(userAgent) {
 // success, or null on ANY failure (unknown platform, 404, network error,
 // malformed JSON, missing/blank `url`). Callers treat null as "use the
 // fail-safe" — this function NEVER throws.
-async function fetchManifest(platform) {
+async function fetchManifest(platform, cfg = config()) {
   if (!KNOWN_PLATFORMS.includes(platform)) return null;
   try {
-    const res = await fetch(`${MANIFEST_BASE}/${platform}.json`, {
+    const res = await fetch(`${cfg.manifestBase}/${platform}.json`, {
       // Edge-cache the manifest so we don't hit R2 on every request. 5 min TTL
       // means a freshly-published install URL is live within 5 minutes even
       // without an explicit purge (publish.sh also purges it for instant pickup).
@@ -142,11 +192,16 @@ async function fetchManifest(platform) {
   }
 }
 
-// Resolve a known platform to a redirect target. Fail-safe: DEFAULT_URL when the
-// manifest can't be read.
-async function resolveUrl(platform) {
-  const manifest = await fetchManifest(platform);
-  return manifest && manifest.url ? manifest.url : DEFAULT_URL;
+// Resolve a known platform to a redirect target. Fail-safe when the manifest
+// can't be read: for the Steam Deck (the primary Linux target) fall back to the
+// channel-appropriate DEFAULT_INSTALL page (stable on prod, staging on staging);
+// for every other platform fall back to the universal DEFAULT_URL. Both keep the
+// worker channel-correct without hardcoding stable/prod.
+async function resolveUrl(platform, cfg = config()) {
+  const manifest = await fetchManifest(platform, cfg);
+  if (manifest && manifest.url) return manifest.url;
+  if (platform === "steamdeck") return cfg.defaultInstall || DEFAULT_URL;
+  return DEFAULT_URL;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,8 +224,8 @@ function escapeHtml(str) {
 // Build the chooser button list, preferring each manifest's label/sub and
 // falling back to PLATFORM_DEFAULTS. Manifests are fetched in parallel (all
 // edge-cached); a failed fetch simply uses the defaults.
-async function chooserItems() {
-  const manifests = await Promise.all(KNOWN_PLATFORMS.map(fetchManifest));
+async function chooserItems(cfg = config()) {
+  const manifests = await Promise.all(KNOWN_PLATFORMS.map((p) => fetchManifest(p, cfg)));
   return KNOWN_PLATFORMS.map((platform, i) => {
     const m = manifests[i] || {};
     const d = PLATFORM_DEFAULTS[platform] || { label: platform, sub: "" };
@@ -182,11 +237,16 @@ async function chooserItems() {
   });
 }
 
-function chooserPage(items) {
+// `selfPath` is the route this Worker is actually serving on — "/install" in
+// prod, "/staging" in staging. The chooser buttons must link back to the SAME
+// path (with ?platform=), NOT a hardcoded "/install", so a chooser rendered by
+// the staging Worker keeps the visitor on the staging Worker (staging pages),
+// never bouncing them onto the prod route. Derived from the request pathname.
+function chooserPage(items, selfPath = "/install") {
   const buttons = items
     .map(
       (it) =>
-        `      <a class="btn" href="/install?platform=${encodeURIComponent(it.platform)}">${escapeHtml(it.label)}<span class="sub">${escapeHtml(it.sub)}</span></a>`,
+        `      <a class="btn" href="${escapeHtml(selfPath)}?platform=${encodeURIComponent(it.platform)}">${escapeHtml(it.label)}<span class="sub">${escapeHtml(it.sub)}</span></a>`,
     )
     .join("\n");
 
@@ -266,9 +326,9 @@ ${buttons}
 
 // Render the chooser as a Response. Always succeeds — manifest failures fall
 // back to built-in labels; the page never dead-ends.
-async function chooserResponse() {
-  const items = await chooserItems();
-  return new Response(chooserPage(items), {
+async function chooserResponse(cfg = config(), selfPath = "/install") {
+  const items = await chooserItems(cfg);
+  return new Response(chooserPage(items, selfPath), {
     status: 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
@@ -276,11 +336,13 @@ async function chooserResponse() {
       // edge-cached individually. The page depends on the User-Agent path.
       "Cache-Control": "no-store",
       "Vary": "User-Agent",
+      // Staging only: keep the chooser out of search indexes at the HTTP layer.
+      ...noindexHeader(cfg),
     },
   });
 }
 
-function redirectResponse(target) {
+function redirectResponse(target, cfg = config()) {
   return new Response(null, {
     status: 302,
     headers: {
@@ -289,6 +351,8 @@ function redirectResponse(target) {
       // manifest, which is edge-cached at the fetch layer (not here).
       "Cache-Control": "no-store",
       "Vary": "User-Agent",
+      // Staging only: even the 302 carries noindex, nofollow.
+      ...noindexHeader(cfg),
     },
   });
 }
@@ -298,37 +362,48 @@ function redirectResponse(target) {
 // ---------------------------------------------------------------------------
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
+    // Resolve the per-environment config (prod vs staging) from the wrangler
+    // `[vars]` binding. Everything channel-specific flows from cfg.
+    const cfg = config(env);
+
     if (request.method !== "GET") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { "Allow": "GET", "Content-Type": "text/plain; charset=utf-8" },
+        headers: {
+          "Allow": "GET",
+          "Content-Type": "text/plain; charset=utf-8",
+          ...noindexHeader(cfg),
+        },
       });
     }
 
     const url = new URL(request.url);
+    // The route this Worker serves on ("/install" prod, "/staging" staging).
+    // Chooser self-links use it so a staging chooser stays on the staging route.
+    const selfPath = url.pathname;
 
     // Explicit ?platform=<p> — the chooser buttons use this. Resolve it through
     // the SAME per-file manifest lookup as UA detection (no baked URLs anywhere).
     const explicit = url.searchParams.get("platform");
     if (explicit) {
       if (KNOWN_PLATFORMS.includes(explicit)) {
-        return redirectResponse(await resolveUrl(explicit));
+        return redirectResponse(await resolveUrl(explicit, cfg), cfg);
       }
       // Unrecognised platform param → don't guess, show the chooser.
-      return chooserResponse();
+      return chooserResponse(cfg, selfPath);
     }
 
     // No explicit platform — sniff the User-Agent.
     const platform = detectPlatform(request.headers.get("User-Agent"));
     if (KNOWN_PLATFORMS.includes(platform)) {
-      return redirectResponse(await resolveUrl(platform));
+      return redirectResponse(await resolveUrl(platform, cfg), cfg);
     }
 
     // Unknown / iPad / can't-tell → chooser.
-    return chooserResponse();
+    return chooserResponse(cfg, selfPath);
   },
 };
 
 // Exported for local testing harnesses (see README). Not used by the runtime.
-export { detectPlatform, fetchManifest, resolveUrl, chooserItems, KNOWN_PLATFORMS, DEFAULT_URL };
+export { detectPlatform, fetchManifest, resolveUrl, chooserItems, config, KNOWN_PLATFORMS, DEFAULT_URL };

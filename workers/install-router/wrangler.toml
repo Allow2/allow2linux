@@ -3,25 +3,59 @@ main = "src/index.js"
 compatibility_date = "2026-07-01"
 
 # ── Notes ────────────────────────────────────────────────────────────────────
-#  - This Worker only powers the /install path. Everything else on
-#    get.allow2.com (the /steamdeck/stable/ install page, etc.) is served by
-#    the existing origin and is untouched.
-#  - No KV / env vars / secrets needed. The per-platform target URLs are read at
-#    request time from R2 manifests (https://get.allow2.com/install/<p>.json),
+#  - This Worker powers the install-funnel entry point, CO-HOSTED as a
+#    staging+prod pair on get.allow2.com — exactly like get.allow2.com already
+#    co-hosts steamdeck/stable + steamdeck/staging. Two envs of the SAME code:
+#      • production → route get.allow2.com/install  → STABLE pages, indexable.
+#      • staging    → route get.allow2.com/staging  → STAGING pages, noindex.
+#  - Everything else on get.allow2.com (the /steamdeck/<channel>/ install pages,
+#    etc.) is served by the existing origin and is untouched.
+#  - The per-platform target URLs are read at request time from R2 manifests,
 #    NOT baked here — see src/index.js. Shipping a new install page needs no
-#    Worker redeploy.
+#    Worker redeploy. The ONLY per-env config is the `[env.*.vars]` blocks below.
 #
-# ── Production route ─────────────────────────────────────────────────────────
-# The route is bound ONLY under the `production` env (never at top level) so a
-# bare `wrangler deploy` can't claim get.allow2.com/install before an operator/CI
-# has reviewed it. Deploy with:
+# ── EXACT routes (important) ─────────────────────────────────────────────────
+# Both routes are EXACT paths ("get.allow2.com/install", "get.allow2.com/staging"),
+# NOT wildcards. This is deliberate: it stops each Worker from intercepting its
+# OWN manifest fetches. The prod Worker reads get.allow2.com/install/<p>.json and
+# the staging Worker reads get.allow2.com/staging/install/<p>.json — those are
+# SUB-paths of the route, and an EXACT route does not match sub-paths, so the
+# manifest reads fall through to the R2 origin instead of looping back into the
+# Worker. A wildcard ("/install*", "/staging*") would capture them and break the
+# data-driven lookup.
 #
-#     wrangler deploy --env production
-#
-# That command creates (or updates) the route below and binds this Worker to
-# get.allow2.com/install. CI (.github/workflows/deploy-install-router.yml) runs
-# exactly this on a push to the default branch, and `--dry-run` on PRs.
+# The routes are bound ONLY under their env (never at top level) so a bare
+# `wrangler deploy` can't claim a get.allow2.com path before CI/an operator has
+# reviewed it. Deploy with `wrangler deploy --env production` (or `--env staging`).
+# CI (.github/workflows/deploy-install-router.yml) runs those on push to
+# main/staging respectively, and `--env production --dry-run` on PRs.
+
+# ── Production env ───────────────────────────────────────────────────────────
+# Deployed from the `main` branch. Stable pages, indexable (no noindex).
 [env.production]
 routes = [
   { pattern = "get.allow2.com/install", zone_name = "allow2.com" }
 ]
+
+[env.production.vars]
+CHANNEL = "stable"
+MANIFEST_BASE = "https://get.allow2.com/install"
+DEFAULT_INSTALL = "https://get.allow2.com/steamdeck/stable/"
+NOINDEX = ""
+
+# ── Staging env ──────────────────────────────────────────────────────────────
+# Deployed from the `staging` branch. Staging pages, noindex on EVERY response.
+# `name` override makes this a SEPARATE Worker script from production (distinct
+# from the top-level `allow2-install-router`), so the two never clobber each
+# other's route bindings or code.
+[env.staging]
+name = "allow2-install-router-staging"
+routes = [
+  { pattern = "get.allow2.com/staging", zone_name = "allow2.com" }
+]
+
+[env.staging.vars]
+CHANNEL = "staging"
+MANIFEST_BASE = "https://get.allow2.com/staging/install"
+DEFAULT_INSTALL = "https://get.allow2.com/steamdeck/staging/"
+NOINDEX = "1"

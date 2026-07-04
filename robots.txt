@@ -1,4 +1,16 @@
-# Keep the internal beta (staging channel) out of search engines.
-# /steamdeck/stable/ stays crawlable for SEO; only the staging prefix is excluded.
+# Keep anything "staging" out of search engines: the internal beta install pages
+# (/steamdeck/staging/) AND the staging install-router route (/staging + its
+# sub-paths, e.g. /staging/install/...). /steamdeck/stable/ and the prod
+# /install route stay crawlable for SEO.
+#
+# `Disallow: /*staging` matches "staging" ANYWHERE in the path — robots.txt `*`
+# spans path segments — so this ONE rule covers /staging, /steamdeck/staging/,
+# and any future /x/staging. The explicit /steamdeck/staging/ line below is kept
+# (harmless, and self-documenting).
+#
+# NOTE: robots.txt only controls CRAWLING. The real no-index guarantee for the
+# staging install-router is the X-Robots-Tag: noindex, nofollow header its Worker
+# adds to every response (see workers/install-router).
 User-agent: *
+Disallow: /*staging
 Disallow: /steamdeck/staging/

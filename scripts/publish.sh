@@ -301,33 +301,36 @@ r2_put "${INSTALL_PAGE}"   "${PREFIX}/${SUBDIR}/index.html"      "text/html"  "n
 r2_put "${HARDENING_PAGE}" "${PREFIX}/${SUBDIR}/hardening.html"  "text/html"  "no-cache"
 echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html + ${SUBDIR}/hardening.html"
 
-# ── 4c. Write THIS platform's install-router manifest entry ──────────────────
-# The get.allow2.com/install Worker (workers/install-router) is data-driven: it
-# reads a per-platform manifest from R2 at request time and 302s to its `.url`.
-# Here we publish OUR entry — install/steamdeck.json — pointing at this channel's
-# real install page. Publishing a new page therefore needs NO Worker redeploy;
-# the Worker picks up the new URL within its 5-minute edge TTL (and the purge in
-# step 5 makes it instant).
+# ── 4c. Write THIS platform's install-router manifest entry (CHANNEL-AWARE) ───
+# The install-router Worker (workers/install-router) is data-driven: it reads a
+# per-platform manifest from R2 at request time and 302s to its `.url`. It is
+# CO-HOSTED as a staging+prod pair, and EACH env reads a DIFFERENT manifest base:
+#   production Worker → get.allow2.com/install/<platform>.json
+#   staging    Worker → get.allow2.com/staging/install/<platform>.json
+# So this publish must write OUR entry to the manifest path for the channel it is
+# publishing — otherwise the staging Worker would never see the staging page.
 #
-#   staging    → https://get.allow2.com/steamdeck/staging/   (internal testers)
-#   production → https://get.allow2.com/steamdeck/stable/     (public/prod)
+#   production channel → key  install/steamdeck.json          → steamdeck/stable/
+#   staging    channel → key  staging/install/steamdeck.json  → steamdeck/staging/
 #
-# The manifest is a DOMAIN-LEVEL object at install/steamdeck.json — NOT under the
-# steamdeck/<channel>/ prefix — so the per-channel `--delete` sync never touches
-# it, and BOTH channels write the SAME key (whichever publishes last wins). That
-# is intended: the public entry point should point at whatever we most recently
-# published for the Deck. Content-Type application/json + no-cache so a re-publish
-# is never served stale.
+# Publishing a new page therefore needs NO Worker redeploy; the matching-env
+# Worker picks up the new URL within its 5-minute edge TTL (and the purge in step
+# 5 makes it instant). The two channels write DIFFERENT keys, so they never
+# clobber each other (unlike before, when both wrote the single install/... key).
+#
+# Both keys are DOMAIN-ROOT objects — NOT under the steamdeck/<channel>/ prefix —
+# so the per-channel `--delete` sync never touches them. Content-Type
+# application/json + no-cache so a re-publish is never served stale.
 #
 # NOTE: other platform repos (windows / mac / android) write their OWN
-# install/<platform>.json the SAME way from their own release pipelines — this
-# repo owns ONLY the steamdeck entry.
-#
-# KEY: this is a DOMAIN-ROOT object served at get.allow2.com/install/steamdeck.json
-# (exactly what the Worker fetches), so it is written to the bucket-root key
-# `install/steamdeck.json` — the same bucket-root convention as robots.txt above,
-# NOT under the steamdeck/<channel>/ prefix.
+# [staging/]install/<platform>.json the SAME way from their own release
+# pipelines — this repo owns ONLY the steamdeck entry.
 INSTALL_PAGE_URL="https://get.allow2.com/steamdeck/${SUBDIR}/"
+if [ "${CHANNEL}" = "staging" ]; then
+    MANIFEST_KEY="staging/install/steamdeck.json"
+else
+    MANIFEST_KEY="install/steamdeck.json"
+fi
 MANIFEST_JSON="$(mktemp "${TMPDIR:-/tmp}/steamdeck.json.XXXXXX")"
 # Chain into any existing EXIT trap (the GPG block may have set one for PUB_REF)
 # so both temp files are cleaned up — a bare `trap ... EXIT` would replace it.
@@ -341,16 +344,17 @@ cat > "${MANIFEST_JSON}" <<JSON
   "updatedAt": "$(date -u +%FT%TZ)"
 }
 JSON
-r2_put "${MANIFEST_JSON}" "install/steamdeck.json" "application/json" "no-cache"
-echo "    wrote install/steamdeck.json -> ${INSTALL_PAGE_URL}"
+r2_put "${MANIFEST_JSON}" "${MANIFEST_KEY}" "application/json" "no-cache"
+echo "    wrote ${MANIFEST_KEY} -> ${INSTALL_PAGE_URL}"
 
-# ── 4a. Publish the domain-root robots.txt (excludes the staging beta) ────────
+# ── 4a. Publish the domain-root robots.txt (excludes everything "staging") ────
 # This is a DOMAIN-ROOT object (served at get.allow2.com/robots.txt), NOT under
 # steamdeck/<channel>/ — robots.txt is only honoured at the site root. It is
-# channel-agnostic (Disallow: /steamdeck/staging/, stable stays crawlable), so we
-# (re-)upload it on EVERY publish regardless of channel: idempotent + cheap, and
-# it can't be clobbered by the per-channel --delete sync (that only scopes the
-# steamdeck/<channel>/ prefix).
+# channel-agnostic (Disallow: /*staging covers the staging beta pages AND the
+# staging install-router route + its /staging/install/ manifests; stable +
+# the prod /install route stay crawlable), so we (re-)upload it on EVERY publish
+# regardless of channel: idempotent + cheap, and it can't be clobbered by the
+# per-channel --delete sync (that only scopes the steamdeck/<channel>/ prefix).
 ROBOTS_SRC="${PROJECT_ROOT}/robots.txt"
 [ -f "${ROBOTS_SRC}" ] || { echo "ERROR: ${ROBOTS_SRC} not found"; exit 1; }
 r2_put "${ROBOTS_SRC}" "robots.txt" "text/plain"
@@ -398,7 +402,7 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
   "${PUBLIC_URL}/hardening.html",
   "${PUBLIC_URL}/${REF_FILE}",
   "https://get.allow2.com/robots.txt",
-  "https://get.allow2.com/install/steamdeck.json"
+  "https://get.allow2.com/${MANIFEST_KEY}"
 ]}
 JSON
 )
@@ -407,7 +411,7 @@ JSON
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
         --data "${PURGE_FILES}" >/dev/null
-    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + bare-dir URL (/ and no-slash) + index.html + hardening.html + ${REF_FILE} + root robots.txt + install/steamdeck.json"
+    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + bare-dir URL (/ and no-slash) + index.html + hardening.html + ${REF_FILE} + root robots.txt + ${MANIFEST_KEY}"
 else
     echo "    SKIPPED — set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID to auto-purge."
     echo "    Until then, testers may see stale metadata until the CDN TTL expires."
