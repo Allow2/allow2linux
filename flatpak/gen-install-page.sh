@@ -305,7 +305,7 @@ ${STEP0_PANEL}
         installs Allow2 from the <strong>${CHANNEL_LABEL}</strong> channel
         (<code>${SUBDIR}</code> remote, <code>Branch=${APP_BRANCH}</code>), and
         launches straight into pairing:</p>
-        <pre class="copyable"><code>flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo &amp;&amp; flatpak install -y --from ${REF_URL} &amp;&amp; flatpak run com.allow2.allow2linux</code></pre>
+        <pre class="copyable"><code>flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo &amp;&amp; flatpak install --user -y --from ${REF_URL} &amp;&amp; flatpak run com.allow2.allow2linux</code></pre>
         <p class="hint">First run sets up the background service and opens the pairing
         screen. In the <strong>Allow2 app</strong>, scan the <strong>QR code</strong>
         (or enter the <strong>6-digit PIN</strong>) and pick the child. That's the
@@ -411,7 +411,7 @@ loginctl show-user "\$USER" | grep Linger            # Linger=yes</code></pre>
   <h2 id="after-steps">Automatic updates</h2>
   <p>You're done. New versions arrive automatically (the update timer runs
   ~15&nbsp;min after boot and every 6&nbsp;hours). To force an update now:</p>
-  <pre class="copyable"><code>flatpak update -y ${APP_ID}</code></pre>
+  <pre class="copyable"><code>flatpak update --user -y ${APP_ID}</code></pre>
 
   <h2>Stop kids bypassing it</h2>
   <p>On a Steam Deck the easy escape is dropping into Desktop Mode to switch the
