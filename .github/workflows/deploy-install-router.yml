@@ -29,9 +29,20 @@ on:
     branches: [staging, main]     # staging → staging env, main → production env
     paths:
       - 'workers/install-router/**'
+      - '.github/workflows/deploy-install-router.yml'
   pull_request:
     paths:
       - 'workers/install-router/**'
+      - '.github/workflows/deploy-install-router.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which env to deploy
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
 
 jobs:
   deploy:
@@ -77,3 +88,14 @@ jobs:
           workingDirectory: workers/install-router
           # Validate only — no route claimed, nothing published.
           command: deploy --env production --dry-run
+
+      - name: Deploy (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/install-router
+          # Real deploy of the operator-chosen env (production or staging) per
+          # wrangler.toml [env.<environment>]. Manual "Run workflow" button.
+          command: deploy --env ${{ inputs.environment }}
