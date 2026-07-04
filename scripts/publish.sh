@@ -263,23 +263,42 @@ fi
 
 # Upload one file to the channel prefix with an explicit Content-Type, honouring
 # SYNC_TOOL (creds already exported by the sync step above).
-r2_put() {  # r2_put <local-file> <dest-key> <content-type>
-    local src="$1" key="$2" ctype="$3"
+r2_put() {  # r2_put <local-file> <dest-key> <content-type> [cache-control]
+    local src="$1" key="$2" ctype="$3" cache="${4:-}"
     if [ "${SYNC_TOOL}" = "rclone" ]; then
-        rclone copyto "${src}" "r2beta:${R2_BUCKET}/${key}" \
-            --header-upload "Content-Type: ${ctype}"
+        if [ -n "${cache}" ]; then
+            rclone copyto "${src}" "r2beta:${R2_BUCKET}/${key}" \
+                --header-upload "Content-Type: ${ctype}" \
+                --header-upload "Cache-Control: ${cache}"
+        else
+            rclone copyto "${src}" "r2beta:${R2_BUCKET}/${key}" \
+                --header-upload "Content-Type: ${ctype}"
+        fi
     else
-        aws s3 cp "${src}" "s3://${R2_BUCKET}/${key}" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --checksum-algorithm CRC32 \
-            --content-type "${ctype}" \
-            --no-progress
+        if [ -n "${cache}" ]; then
+            aws s3 cp "${src}" "s3://${R2_BUCKET}/${key}" \
+                --endpoint-url "${R2_ENDPOINT}" \
+                --checksum-algorithm CRC32 \
+                --content-type "${ctype}" \
+                --cache-control "${cache}" \
+                --no-progress
+        else
+            aws s3 cp "${src}" "s3://${R2_BUCKET}/${key}" \
+                --endpoint-url "${R2_ENDPOINT}" \
+                --checksum-algorithm CRC32 \
+                --content-type "${ctype}" \
+                --no-progress
+        fi
     fi
 }
 
+# HTML pages get a revalidating Cache-Control so the CDN can cache+purge but
+# browsers always revalidate (no stale install page held client-side after a
+# republish). The ostree/immutable objects below intentionally get NO
+# Cache-Control (they stay long-cached — content-addressed, never change).
 r2_put "${REF_UPLOAD}"     "${PREFIX}/${SUBDIR}/${REF_FILE}"     "application/vnd.flatpak.ref"
-r2_put "${INSTALL_PAGE}"   "${PREFIX}/${SUBDIR}/index.html"      "text/html"
-r2_put "${HARDENING_PAGE}" "${PREFIX}/${SUBDIR}/hardening.html"  "text/html"
+r2_put "${INSTALL_PAGE}"   "${PREFIX}/${SUBDIR}/index.html"      "text/html"  "no-cache"
+r2_put "${HARDENING_PAGE}" "${PREFIX}/${SUBDIR}/hardening.html"  "text/html"  "no-cache"
 echo "    uploaded ${SUBDIR}/${REF_FILE} + ${SUBDIR}/index.html + ${SUBDIR}/hardening.html"
 
 # ── 4a. Publish the domain-root robots.txt (excludes the staging beta) ────────
@@ -330,6 +349,8 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ZONE_ID:-}" ]; then
   "${PUBLIC_URL}/summary.sig",
   "${PUBLIC_URL}/summary.idx",
   "${PUBLIC_URL}/config",
+  "${PUBLIC_URL}/",
+  "${PUBLIC_URL}",
   "${PUBLIC_URL}/index.html",
   "${PUBLIC_URL}/hardening.html",
   "${PUBLIC_URL}/${REF_FILE}",
@@ -342,7 +363,7 @@ JSON
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
         --data "${PURGE_FILES}" >/dev/null
-    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + index.html + hardening.html + ${REF_FILE} + root robots.txt"
+    echo "    purged ${SUBDIR}/summary{,.sig,.idx} + config + bare-dir URL (/ and no-slash) + index.html + hardening.html + ${REF_FILE} + root robots.txt"
 else
     echo "    SKIPPED — set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID to auto-purge."
     echo "    Until then, testers may see stale metadata until the CDN TTL expires."
