@@ -40,41 +40,40 @@ jobs:
       - uses: actions/checkout@v4
 
       # Separate, if:-gated steps per target (clearer than one nested expression).
-      # wrangler-action@v3 is PINNED deliberately: v4 defaults to Wrangler 4, a
-      # major bump we are NOT adopting here. Staying on v3 + an explicit Wrangler
-      # 3 version keeps the deploy reproducible.
+      # wrangler-action@v4 (bundles Wrangler 4) is REQUIRED: GitHub runners now
+      # default to Node 24 (Node 20 deprecated), and the old Wrangler 3.90.0 pin
+      # crashed on `deploy` under Node 24. Wrangler 4 supports Node 20+/24. We let
+      # @v4 use its bundled Wrangler 4 (no wranglerVersion pin) so the deploy
+      # tracks a Node-24-compatible toolchain.
 
       - name: Deploy production (push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/install-router
-          wranglerVersion: '3.90.0'
           # Real deploy: binds the production route get.allow2.com/install
           # (stable pages, indexable) per wrangler.toml [env.production].
           command: deploy --env production
 
       - name: Deploy staging (push to staging)
         if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/install-router
-          wranglerVersion: '3.90.0'
           # Real deploy: binds the staging route get.allow2.com/staging
           # (staging pages, noindex) per wrangler.toml [env.staging].
           command: deploy --env staging
 
       - name: Validate (pull_request, dry-run)
         if: github.event_name == 'pull_request'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/install-router
-          wranglerVersion: '3.90.0'
           # Validate only — no route claimed, nothing published.
           command: deploy --env production --dry-run
