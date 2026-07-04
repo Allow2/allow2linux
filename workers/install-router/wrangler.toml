@@ -1,0 +1,17 @@
+name = "allow2-install-router"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Deploy, then bind the public entry point. The operator must add this route
+# (and confirm the zone) so get.allow2.com/install resolves to this Worker.
+#
+# [[routes]]
+# pattern = "get.allow2.com/install"
+# zone_name = "allow2.com"
+#
+# Notes:
+#  - This Worker only powers the /install path. Everything else on
+#    get.allow2.com (the /steamdeck/stable/ install page, etc.) is served by
+#    the existing origin and is untouched.
+#  - No KV / env vars / secrets needed. All per-platform target URLs are
+#    plain constants at the top of src/index.js — edit them there and redeploy.
