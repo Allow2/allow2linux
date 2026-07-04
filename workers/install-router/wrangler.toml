@@ -2,16 +2,26 @@ name = "allow2-install-router"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
-# Deploy, then bind the public entry point. The operator must add this route
-# (and confirm the zone) so get.allow2.com/install resolves to this Worker.
-#
-# [[routes]]
-# pattern = "get.allow2.com/install"
-# zone_name = "allow2.com"
-#
-# Notes:
+# ── Notes ────────────────────────────────────────────────────────────────────
 #  - This Worker only powers the /install path. Everything else on
 #    get.allow2.com (the /steamdeck/stable/ install page, etc.) is served by
 #    the existing origin and is untouched.
-#  - No KV / env vars / secrets needed. All per-platform target URLs are
-#    plain constants at the top of src/index.js — edit them there and redeploy.
+#  - No KV / env vars / secrets needed. The per-platform target URLs are read at
+#    request time from R2 manifests (https://get.allow2.com/install/<p>.json),
+#    NOT baked here — see src/index.js. Shipping a new install page needs no
+#    Worker redeploy.
+#
+# ── Production route ─────────────────────────────────────────────────────────
+# The route is bound ONLY under the `production` env (never at top level) so a
+# bare `wrangler deploy` can't claim get.allow2.com/install before an operator/CI
+# has reviewed it. Deploy with:
+#
+#     wrangler deploy --env production
+#
+# That command creates (or updates) the route below and binds this Worker to
+# get.allow2.com/install. CI (.github/workflows/deploy-install-router.yml) runs
+# exactly this on a push to the default branch, and `--dry-run` on PRs.
+[env.production]
+routes = [
+  { pattern = "get.allow2.com/install", zone_name = "allow2.com" }
+]

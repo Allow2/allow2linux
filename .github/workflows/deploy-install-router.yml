@@ -1,0 +1,52 @@
+name: Deploy install-router (Cloudflare Worker)
+
+# Deploys the get.allow2.com/install Worker (workers/install-router) to
+# Cloudflare. The Worker is data-driven — per-platform install URLs live in R2
+# manifests, not in the Worker — so this pipeline only ships the routing logic.
+#
+#   push to the default branch → deploy --env production (binds the route)
+#   pull_request               → deploy --env production --dry-run (validate only)
+#
+# ── Secrets (repo/org settings → Actions → Secrets) ──────────────────────────
+#   CF_WORKERS_API_TOKEN     Cloudflare API token for Workers deploys. Create it
+#                            from the "Edit Cloudflare Workers" API-token TEMPLATE,
+#                            zone-scoped to allow2.com (it needs Workers Scripts +
+#                            Workers Routes edit on that zone). This is DISTINCT
+#                            from the existing CLOUDFLARE_API_TOKEN used by
+#                            publish.yml, which is a cache-purge-only token and
+#                            CANNOT deploy Workers. Keep them separate.
+#   CLOUDFLARE_ACCOUNT_ID    Cloudflare account id that owns the Worker.
+#
+# NOTE: this is separate from the R2/GPG secret set used by publish.yml — a
+# Worker deploy needs neither R2 credentials nor the Flatpak signing key.
+
+on:
+  push:
+    branches: [master]            # the repo default branch (origin/HEAD)
+    paths:
+      - 'workers/install-router/**'
+  pull_request:
+    paths:
+      - 'workers/install-router/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy (push) / validate (PR)
+        # wrangler-action@v3 is PINNED deliberately: v4 defaults to Wrangler 4,
+        # a major bump we are NOT adopting here. Staying on v3 + an explicit
+        # Wrangler 3 version keeps the deploy reproducible.
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_WORKERS_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/install-router
+          wranglerVersion: '3.90.0'
+          # On PRs, validate only (no route claimed, nothing published). On a push
+          # to the default branch, do the real deploy which binds the production
+          # route (get.allow2.com/install) per wrangler.toml [env.production].
+          command: >-
+            deploy --env production${{ github.event_name == 'pull_request' && ' --dry-run' || '' }}

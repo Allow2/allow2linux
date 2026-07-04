@@ -7,29 +7,59 @@
 // "parent setting up from an iPad" case), we serve a small self-contained
 // "choose your device" page so they can pick.
 //
-// Dependency-free Cloudflare Worker (ES module format). No external fetches.
+// Dependency-free Cloudflare Worker (ES module format).
+//
+// DATA-DRIVEN TARGETS (this is the important part):
+// The per-platform install URLs are NOT baked into this Worker. At request time
+// the Worker fetches a tiny per-platform manifest from R2 —
+//   https://get.allow2.com/install/<platform>.json
+// — edge-cached for 5 minutes, and 302s to that manifest's `.url`. Each platform
+// repo publishes its OWN manifest from its OWN release pipeline (the Steam Deck
+// one is written by scripts/publish.sh in this repo). Shipping a new install
+// page therefore needs NO Worker redeploy — the publish step just rewrites its
+// manifest entry and the edge picks it up within the TTL.
+//
+// The only things genuinely baked into the Worker are (a) the LIST of known
+// platforms and (b) the UA→platform detection logic — that's real logic, not
+// configuration. Everything URL-shaped lives in the manifests.
+//
+// Manifest JSON shape (see README.md "Manifest schema"):
+//   {
+//     "platform":  "steamdeck",
+//     "url":       "https://get.allow2.com/steamdeck/stable/",
+//     "label":     "Steam Deck / Linux",     // optional — chooser button title
+//     "sub":       "SteamOS or desktop Linux",// optional — chooser button subtitle
+//     "updatedAt": "2026-07-04T00:00:00Z"     // optional — informational
+//   }
 //
 // This lives in the allow2linux repo for now because the get.allow2.com
 // tooling (scripts/publish.sh, flatpak/gen-install-page.sh) lives here. It is
 // NOT Steam-Deck-specific — it is the cross-platform funnel entry point.
 
 // ---------------------------------------------------------------------------
-// Per-platform install targets. Update these as real pages ship.
+// Baked-in configuration — the ONLY things not sourced from a manifest.
 // ---------------------------------------------------------------------------
 
-// REAL — the existing Steam Deck / Linux install page published by
-// scripts/publish.sh + flatpak/gen-install-page.sh in this repo.
-const STEAMDECK_INSTALL_URL = "https://get.allow2.com/steamdeck/stable/";
+// The known platforms. This is genuine logic (detectPlatform maps into it, and
+// the chooser renders one button per entry). Adding a platform means adding it
+// here + shipping its manifest — no URL ever lives in this file.
+const KNOWN_PLATFORMS = ["steamdeck", "windows", "mac", "android"];
 
-// PLACEHOLDER — no dedicated Windows install page yet. Defaults to the main
-// site so the funnel never dead-ends. Operator: replace with the real URL.
-const WINDOWS_INSTALL_URL = "https://allow2.com/";
+// Base for the per-platform manifests in R2 (served via get.allow2.com).
+const MANIFEST_BASE = "https://get.allow2.com/install";
 
-// PLACEHOLDER — no dedicated macOS install page yet. Defaults to main site.
-const MAC_INSTALL_URL = "https://allow2.com/";
+// FAIL-SAFE fallback. If a manifest is missing / errors / is malformed, redirect
+// here instead of dead-ending or throwing. Never leave the user stranded.
+const DEFAULT_URL = "https://allow2.com/";
 
-// PLACEHOLDER — no dedicated Android install page yet. Defaults to main site.
-const ANDROID_INSTALL_URL = "https://allow2.com/";
+// Built-in chooser labels — used ONLY when a manifest omits label/sub (or can't
+// be fetched). The manifest's label/sub win when present.
+const PLATFORM_DEFAULTS = {
+  steamdeck: { label: "Steam Deck / Linux", sub: "SteamOS or desktop Linux" },
+  windows: { label: "Windows", sub: "Windows 10 and 11" },
+  mac: { label: "macOS", sub: "Apple silicon and Intel" },
+  android: { label: "Android", sub: "Phones and tablets" },
+};
 
 // ---------------------------------------------------------------------------
 // Platform detection.
@@ -84,28 +114,82 @@ function detectPlatform(userAgent) {
   return "unknown";
 }
 
-function targetFor(platform) {
-  switch (platform) {
-    case "steamdeck":
-      return STEAMDECK_INSTALL_URL;
-    case "windows":
-      return WINDOWS_INSTALL_URL;
-    case "mac":
-      return MAC_INSTALL_URL;
-    case "android":
-      return ANDROID_INSTALL_URL;
-    default:
-      return null; // -> chooser page
+// ---------------------------------------------------------------------------
+// Manifest lookup — the per-file, request-time, edge-cached read from R2.
+// ---------------------------------------------------------------------------
+
+// Fetch + validate one platform's manifest. Returns the parsed object on
+// success, or null on ANY failure (unknown platform, 404, network error,
+// malformed JSON, missing/blank `url`). Callers treat null as "use the
+// fail-safe" — this function NEVER throws.
+async function fetchManifest(platform) {
+  if (!KNOWN_PLATFORMS.includes(platform)) return null;
+  try {
+    const res = await fetch(`${MANIFEST_BASE}/${platform}.json`, {
+      // Edge-cache the manifest so we don't hit R2 on every request. 5 min TTL
+      // means a freshly-published install URL is live within 5 minutes even
+      // without an explicit purge (publish.sh also purges it for instant pickup).
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || typeof data.url !== "string" || data.url.length === 0) {
+      return null;
+    }
+    return data;
+  } catch (_err) {
+    return null;
   }
+}
+
+// Resolve a known platform to a redirect target. Fail-safe: DEFAULT_URL when the
+// manifest can't be read.
+async function resolveUrl(platform) {
+  const manifest = await fetchManifest(platform);
+  return manifest && manifest.url ? manifest.url : DEFAULT_URL;
 }
 
 // ---------------------------------------------------------------------------
 // "Choose your device" fallback page. Self-contained, responsive, no external
-// assets. NOTE: visible copy avoids the spaced em-dash (an AI-generated tell)
+// assets. Buttons carry NO baked URLs — each links back to /install?platform=<p>
+// so the Worker resolves the real target through the SAME manifest lookup.
+// Labels/subs come from the manifests when available, else the built-in
+// defaults. NOTE: visible copy avoids the spaced em-dash (an AI-generated tell)
 // per the get.allow2.com published-content style rule.
 // ---------------------------------------------------------------------------
 
-function chooserPage() {
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Build the chooser button list, preferring each manifest's label/sub and
+// falling back to PLATFORM_DEFAULTS. Manifests are fetched in parallel (all
+// edge-cached); a failed fetch simply uses the defaults.
+async function chooserItems() {
+  const manifests = await Promise.all(KNOWN_PLATFORMS.map(fetchManifest));
+  return KNOWN_PLATFORMS.map((platform, i) => {
+    const m = manifests[i] || {};
+    const d = PLATFORM_DEFAULTS[platform] || { label: platform, sub: "" };
+    return {
+      platform,
+      label: typeof m.label === "string" && m.label ? m.label : d.label,
+      sub: typeof m.sub === "string" && m.sub ? m.sub : d.sub,
+    };
+  });
+}
+
+function chooserPage(items) {
+  const buttons = items
+    .map(
+      (it) =>
+        `      <a class="btn" href="/install?platform=${encodeURIComponent(it.platform)}">${escapeHtml(it.label)}<span class="sub">${escapeHtml(it.sub)}</span></a>`,
+    )
+    .join("\n");
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -172,15 +256,41 @@ function chooserPage() {
     <h1>Install Allow2</h1>
     <p class="lead">Pick the device you want to set up.</p>
     <div class="grid">
-      <a class="btn" href="${STEAMDECK_INSTALL_URL}">Steam Deck / Linux<span class="sub">SteamOS or desktop Linux</span></a>
-      <a class="btn" href="${WINDOWS_INSTALL_URL}">Windows<span class="sub">Windows 10 and 11</span></a>
-      <a class="btn" href="${MAC_INSTALL_URL}">macOS<span class="sub">Apple silicon and Intel</span></a>
-      <a class="btn" href="${ANDROID_INSTALL_URL}">Android<span class="sub">Phones and tablets</span></a>
+${buttons}
     </div>
     <p class="hint">Setting up a Steam Deck? Open this page on the Deck itself.</p>
   </main>
 </body>
 </html>`;
+}
+
+// Render the chooser as a Response. Always succeeds — manifest failures fall
+// back to built-in labels; the page never dead-ends.
+async function chooserResponse() {
+  const items = await chooserItems();
+  return new Response(chooserPage(items), {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      // Don't cache the chooser response itself — the manifests it reads are
+      // edge-cached individually. The page depends on the User-Agent path.
+      "Cache-Control": "no-store",
+      "Vary": "User-Agent",
+    },
+  });
+}
+
+function redirectResponse(target) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "Location": target,
+      // Don't cache the redirect — routing depends on the User-Agent and on the
+      // manifest, which is edge-cached at the fetch layer (not here).
+      "Cache-Control": "no-store",
+      "Vary": "User-Agent",
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -196,32 +306,29 @@ export default {
       });
     }
 
-    const platform = detectPlatform(request.headers.get("User-Agent"));
-    const target = targetFor(platform);
+    const url = new URL(request.url);
 
-    if (target) {
-      return new Response(null, {
-        status: 302,
-        headers: {
-          "Location": target,
-          // Don't cache the redirect — routing depends on the User-Agent, and
-          // targets change as real pages ship.
-          "Cache-Control": "no-store",
-          "Vary": "User-Agent",
-        },
-      });
+    // Explicit ?platform=<p> — the chooser buttons use this. Resolve it through
+    // the SAME per-file manifest lookup as UA detection (no baked URLs anywhere).
+    const explicit = url.searchParams.get("platform");
+    if (explicit) {
+      if (KNOWN_PLATFORMS.includes(explicit)) {
+        return redirectResponse(await resolveUrl(explicit));
+      }
+      // Unrecognised platform param → don't guess, show the chooser.
+      return chooserResponse();
     }
 
-    return new Response(chooserPage(), {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-        "Vary": "User-Agent",
-      },
-    });
+    // No explicit platform — sniff the User-Agent.
+    const platform = detectPlatform(request.headers.get("User-Agent"));
+    if (KNOWN_PLATFORMS.includes(platform)) {
+      return redirectResponse(await resolveUrl(platform));
+    }
+
+    // Unknown / iPad / can't-tell → chooser.
+    return chooserResponse();
   },
 };
 
 // Exported for local testing harnesses (see README). Not used by the runtime.
-export { detectPlatform, targetFor };
+export { detectPlatform, fetchManifest, resolveUrl, chooserItems, KNOWN_PLATFORMS, DEFAULT_URL };
