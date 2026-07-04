@@ -8,6 +8,7 @@ import worker, {
   detectPlatform,
   fetchManifest,
   resolveUrl,
+  withIndex,
   config,
   DEFAULT_URL,
 } from "../src/index.js";
@@ -80,7 +81,21 @@ setManifests({
   steamdeck: { status: 200, body: jsonBody({ platform: "steamdeck", url: "https://get.allow2.com/steamdeck/stable/", label: "Steam Deck / Linux", sub: "SteamOS or desktop Linux" }) },
 });
 assertEq("fetchManifest valid returns url", (await fetchManifest("steamdeck"))?.url, "https://get.allow2.com/steamdeck/stable/");
-assertEq("resolveUrl valid -> manifest url", await resolveUrl("steamdeck"), "https://get.allow2.com/steamdeck/stable/");
+// resolveUrl appends index.html to the directory-style get.allow2.com install page.
+assertEq("resolveUrl valid -> manifest url + index.html", await resolveUrl("steamdeck"), "https://get.allow2.com/steamdeck/stable/index.html");
+
+// ---------------------------------------------------------------------------
+// withIndex — directory-style get.allow2.com install pages get index.html;
+// everything else (external hosts, already-file URLs) is untouched. No throws,
+// no double-append.
+// ---------------------------------------------------------------------------
+assertEq("withIndex appends index.html to get.allow2.com dir", withIndex("https://get.allow2.com/steamdeck/staging/"), "https://get.allow2.com/steamdeck/staging/index.html");
+assertEq("withIndex leaves an existing index.html unchanged (no double-append)", withIndex("https://get.allow2.com/steamdeck/staging/index.html"), "https://get.allow2.com/steamdeck/staging/index.html");
+assertEq("withIndex leaves a concrete file url unchanged", withIndex("https://get.allow2.com/steamdeck/staging/Allow2.flatpak"), "https://get.allow2.com/steamdeck/staging/Allow2.flatpak");
+assertEq("withIndex leaves the external DEFAULT_URL fail-safe EXACTLY unchanged", withIndex(DEFAULT_URL), "https://allow2.com/");
+assertEq("withIndex leaves DEFAULT_URL === constant (no index.html)", withIndex(DEFAULT_URL), DEFAULT_URL);
+assertEq("withIndex leaves a non-get.allow2.com dir url unchanged", withIndex("https://example.com/foo/"), "https://example.com/foo/");
+assertEq("withIndex returns a malformed url untouched (never throws)", withIndex("not a url"), "not a url");
 
 // 404 → null → DEFAULT_URL.
 setManifests({}); // nothing stubbed => 404
@@ -122,13 +137,16 @@ async function call(path, { ua, method = "GET", env } = {}) {
 setManifests({ steamdeck: { status: 200, body: jsonBody({ platform: "steamdeck", url: "https://get.allow2.com/steamdeck/stable/" }) } });
 const deck = await call("/install", { ua: "Mozilla/5.0 (X11; Linux x86_64) Firefox" });
 assertEq("deck fetch status", deck.status, 302);
-assertEq("deck fetch target (from manifest)", deck.location, "https://get.allow2.com/steamdeck/stable/");
+assertEq("deck fetch target (manifest url + index.html)", deck.location, "https://get.allow2.com/steamdeck/stable/index.html");
 
-// Windows UA with NO manifest stubbed → fail-safe 302 to DEFAULT_URL.
+// Windows UA (KNOWN platform) with NO manifest stubbed → chooser, NOT a bounce to
+// allow2.com. Keeps the visitor in the funnel to pick a supported platform.
 setManifests({});
 const win = await call("/install", { ua: "Mozilla/5.0 (Windows NT 10.0) Chrome" });
-assertEq("windows fetch status", win.status, 302);
-assertEq("windows fail-safe -> DEFAULT_URL", win.location, DEFAULT_URL);
+assertEq("windows missing-manifest -> chooser status", win.status, 200);
+assertEq("windows missing-manifest -> no redirect", win.location, null);
+assertMatch("windows missing-manifest -> chooser renders", win.body, /Pick the device/);
+assertEq("windows missing-manifest -> never DEFAULT_URL redirect", win.location === DEFAULT_URL, false);
 
 // iPad UA → chooser (200 HTML, no redirect).
 const chooser = await call("/install", { ua: "Mozilla/5.0 (iPad; CPU OS 17_0) Safari" });
@@ -150,17 +168,30 @@ setManifests({});
 const chooser3 = await call("/install", { ua: "Mozilla/5.0 (iPad; CPU OS 17_0) Safari" });
 assertMatch("chooser default windows label on 404", chooser3.body, /Windows 10 and 11/);
 
-// ?platform= resolves through the same per-file lookup.
+// ?platform= resolves through the same per-file lookup (+ index.html correction).
 setManifests({ windows: { status: 200, body: jsonBody({ platform: "windows", url: "https://get.allow2.com/windows/stable/" }) } });
 const q = await call("/install?platform=windows", { ua: "Mozilla/5.0 (iPad; CPU OS 17_0) Safari" });
 assertEq("?platform=windows status", q.status, 302);
-assertEq("?platform=windows -> manifest url", q.location, "https://get.allow2.com/windows/stable/");
+assertEq("?platform=windows -> manifest url + index.html", q.location, "https://get.allow2.com/windows/stable/index.html");
 
-// ?platform= with a missing manifest → fail-safe DEFAULT_URL.
+// A manifest url that is already a concrete file is NOT double-suffixed.
+setManifests({ windows: { status: 200, body: jsonBody({ platform: "windows", url: "https://get.allow2.com/windows/stable/setup.exe" }) } });
+const qfile = await call("/install?platform=windows", {});
+assertEq("?platform=windows file url unchanged (no index.html)", qfile.location, "https://get.allow2.com/windows/stable/setup.exe");
+
+// KNOWN platform (mac) with a MISSING manifest → chooser, NOT a DEFAULT_URL redirect.
 setManifests({});
 const qfail = await call("/install?platform=mac", {});
-assertEq("?platform=mac missing manifest status", qfail.status, 302);
-assertEq("?platform=mac -> DEFAULT_URL fail-safe", qfail.location, DEFAULT_URL);
+assertEq("?platform=mac missing manifest -> chooser status", qfail.status, 200);
+assertEq("?platform=mac missing manifest -> no redirect", qfail.location, null);
+assertMatch("?platform=mac missing manifest -> chooser renders", qfail.body, /Pick the device/);
+
+// Same for a UA-DETECTED known platform (mac) with no manifest → chooser, 200 HTML.
+setManifests({});
+const macUa = await call("/install", { ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari" });
+assertEq("mac UA missing manifest -> chooser status", macUa.status, 200);
+assertEq("mac UA missing manifest -> no redirect (not allow2.com)", macUa.location, null);
+assertMatch("mac UA missing manifest -> text/html chooser", macUa.body, /Pick the device/);
 
 // ?platform= with an unknown platform → chooser, never a bad redirect.
 const qbad = await call("/install?platform=blackberry", {});
@@ -199,7 +230,7 @@ assertEq("config(staging) noindex true", config(STAGING_ENV).noindex, true);
 FETCHED = [];
 setManifests({ steamdeck: { status: 200, body: jsonBody({ platform: "steamdeck", url: "https://get.allow2.com/steamdeck/stable/" }) } });
 const pDeck = await call("/install", { ua: "Mozilla/5.0 (X11; Linux x86_64) Firefox", env: PROD_ENV });
-assertEq("prod deck -> stable page", pDeck.location, "https://get.allow2.com/steamdeck/stable/");
+assertEq("prod deck -> stable page (index.html)", pDeck.location, "https://get.allow2.com/steamdeck/stable/index.html");
 assertEq("prod deck NO noindex header", pDeck.robots, null);
 assertMatch("prod fetched the prod manifest base", FETCHED.join("|"), /^https:\/\/get\.allow2\.com\/install\/steamdeck\.json$/m);
 
@@ -207,23 +238,27 @@ assertMatch("prod fetched the prod manifest base", FETCHED.join("|"), /^https:\/
 FETCHED = [];
 setManifests({ steamdeck: { status: 200, body: jsonBody({ platform: "steamdeck", url: "https://get.allow2.com/steamdeck/staging/" }) } });
 const sDeck = await call("/staging", { ua: "Mozilla/5.0 (X11; Linux x86_64) Firefox", env: STAGING_ENV });
-assertEq("staging deck -> staging page", sDeck.location, "https://get.allow2.com/steamdeck/staging/");
+assertEq("staging deck -> staging page (index.html)", sDeck.location, "https://get.allow2.com/steamdeck/staging/index.html");
 assertEq("staging deck noindex header", sDeck.robots, "noindex, nofollow");
 assertMatch("staging fetched the staging manifest base", FETCHED.join("|"), /https:\/\/get\.allow2\.com\/staging\/install\/steamdeck\.json/);
 
-// Deck fail-safe is CHANNEL-AWARE: manifest 404 → DEFAULT_INSTALL for that env.
+// Deck fail-safe is CHANNEL-AWARE: manifest 404 → DEFAULT_INSTALL for that env,
+// index.html-corrected (the deck ALWAYS resolves to a live install page).
 setManifests({});
 const sFail = await call("/staging", { ua: "Mozilla/5.0 (X11; Linux x86_64) Firefox", env: STAGING_ENV });
-assertEq("staging deck fail-safe -> staging DEFAULT_INSTALL", sFail.location, "https://get.allow2.com/steamdeck/staging/");
+assertEq("staging deck fail-safe -> staging DEFAULT_INSTALL (index.html)", sFail.location, "https://get.allow2.com/steamdeck/staging/index.html");
 assertEq("staging deck fail-safe still noindex", sFail.robots, "noindex, nofollow");
 const pFail = await call("/install", { ua: "Mozilla/5.0 (X11; Linux x86_64) Firefox", env: PROD_ENV });
-assertEq("prod deck fail-safe -> stable DEFAULT_INSTALL", pFail.location, "https://get.allow2.com/steamdeck/stable/");
+assertEq("prod deck fail-safe -> stable DEFAULT_INSTALL (index.html)", pFail.location, "https://get.allow2.com/steamdeck/stable/index.html");
 assertEq("prod deck fail-safe NO noindex header", pFail.robots, null);
 
-// Non-deck fail-safe is unchanged (DEFAULT_URL); staging still noindex.
+// Non-deck known platform with no manifest → CHOOSER (not a DEFAULT_URL bounce);
+// staging chooser still carries the noindex header.
 const sWin = await call("/staging", { ua: "Mozilla/5.0 (Windows NT 10.0) Chrome", env: STAGING_ENV });
-assertEq("staging windows fail-safe -> DEFAULT_URL", sWin.location, DEFAULT_URL);
-assertEq("staging windows fail-safe noindex header", sWin.robots, "noindex, nofollow");
+assertEq("staging windows missing-manifest -> chooser status", sWin.status, 200);
+assertEq("staging windows missing-manifest -> no redirect", sWin.location, null);
+assertMatch("staging windows missing-manifest -> chooser renders", sWin.body, /Pick the device/);
+assertEq("staging windows missing-manifest chooser noindex header", sWin.robots, "noindex, nofollow");
 
 // Chooser self-links track the ROUTE: staging stays on /staging, prod on /install.
 const sChooser = await call("/staging", { ua: "Mozilla/5.0 (iPad; CPU OS 17_0) Safari", env: STAGING_ENV });

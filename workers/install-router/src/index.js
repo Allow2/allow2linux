@@ -192,15 +192,43 @@ async function fetchManifest(platform, cfg = config()) {
   }
 }
 
+// get.allow2.com is R2-behind-Cloudflare and does NOT auto-serve index.html for a
+// directory path — a bare `…/steamdeck/staging/` request 404s because no object
+// lives at the directory key. So for INSTALL-PAGE targets on get.allow2.com that
+// end in "/", append the concrete `index.html` object. Only touches get.allow2.com
+// directory URLs; every other host (notably the external DEFAULT_URL fail-safe,
+// https://allow2.com/) and every already-file URL is returned UNCHANGED. Never
+// double-appends. Malformed URLs are returned as-is (this never throws).
+function withIndex(url) {
+  try {
+    const u = new URL(url);
+    if (
+      u.host === "get.allow2.com" &&
+      u.pathname.endsWith("/") &&
+      !u.pathname.endsWith("/index.html")
+    ) {
+      u.pathname += "index.html";
+      return u.toString();
+    }
+  } catch (_err) {
+    /* not a parseable URL — leave it untouched */
+  }
+  return url;
+}
+
 // Resolve a known platform to a redirect target. Fail-safe when the manifest
 // can't be read: for the Steam Deck (the primary Linux target) fall back to the
 // channel-appropriate DEFAULT_INSTALL page (stable on prod, staging on staging);
 // for every other platform fall back to the universal DEFAULT_URL. Both keep the
 // worker channel-correct without hardcoding stable/prod.
+//
+// INSTALL-PAGE targets (the manifest url and DEFAULT_INSTALL) are passed through
+// withIndex so a directory-style get.allow2.com URL resolves to its real
+// index.html object. The DEFAULT_URL external fail-safe is returned verbatim.
 async function resolveUrl(platform, cfg = config()) {
   const manifest = await fetchManifest(platform, cfg);
-  if (manifest && manifest.url) return manifest.url;
-  if (platform === "steamdeck") return cfg.defaultInstall || DEFAULT_URL;
+  if (manifest && manifest.url) return withIndex(manifest.url);
+  if (platform === "steamdeck") return withIndex(cfg.defaultInstall || DEFAULT_URL);
   return DEFAULT_URL;
 }
 
@@ -342,6 +370,20 @@ async function chooserResponse(cfg = config(), selfPath = "/install") {
   });
 }
 
+// Resolve a KNOWN platform to a Response. A valid manifest (or the Steam Deck
+// DEFAULT_INSTALL fail-safe) 302s to the index.html-corrected install page. But a
+// known platform whose manifest is missing/invalid resolves to the DEFAULT_URL
+// fail-safe (allow2.com) — rather than bounce the visitor OFF the funnel, we keep
+// them in it by rendering the SAME chooser page unknown UAs get, so they can pick
+// a platform that has a live install page (e.g. Steam Deck). DEFAULT_URL therefore
+// stays a defined last-ditch constant but is no longer a redirect target for a
+// detected platform.
+async function installResponse(platform, cfg = config(), selfPath = "/install") {
+  const target = await resolveUrl(platform, cfg);
+  if (target === DEFAULT_URL) return chooserResponse(cfg, selfPath);
+  return redirectResponse(target, cfg);
+}
+
 function redirectResponse(target, cfg = config()) {
   return new Response(null, {
     status: 302,
@@ -388,7 +430,7 @@ export default {
     const explicit = url.searchParams.get("platform");
     if (explicit) {
       if (KNOWN_PLATFORMS.includes(explicit)) {
-        return redirectResponse(await resolveUrl(explicit, cfg), cfg);
+        return installResponse(explicit, cfg, selfPath);
       }
       // Unrecognised platform param → don't guess, show the chooser.
       return chooserResponse(cfg, selfPath);
@@ -397,7 +439,7 @@ export default {
     // No explicit platform — sniff the User-Agent.
     const platform = detectPlatform(request.headers.get("User-Agent"));
     if (KNOWN_PLATFORMS.includes(platform)) {
-      return redirectResponse(await resolveUrl(platform, cfg), cfg);
+      return installResponse(platform, cfg, selfPath);
     }
 
     // Unknown / iPad / can't-tell → chooser.
@@ -406,4 +448,4 @@ export default {
 };
 
 // Exported for local testing harnesses (see README). Not used by the runtime.
-export { detectPlatform, fetchManifest, resolveUrl, chooserItems, config, KNOWN_PLATFORMS, DEFAULT_URL };
+export { detectPlatform, fetchManifest, resolveUrl, withIndex, chooserItems, config, KNOWN_PLATFORMS, DEFAULT_URL };
